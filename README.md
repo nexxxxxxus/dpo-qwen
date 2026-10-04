@@ -35,6 +35,14 @@ cd ~/dpo-qwen
 
 Канал `conda-forge` указан явно: каналы Anaconda по умолчанию требуют принять условия использования, а `conda-forge` — нет.
 
+Скрипты запускаем через обёртку `scripts/run.sh`, а не напрямую через `.venv/bin/python`:
+
+```bash
+CUDA_VISIBLE_DEVICES=<карта> scripts/run.sh scripts/smoke_test.py
+```
+
+Обёртка подставляет библиотеки окружения (`LD_LIBRARY_PATH`); без неё импорт vLLM падает с ошибкой `CXXABI_1.3.15 not found`.
+
 `requirements.txt` — список зависимостей, `requirements.lock.txt` — точные версии, с которыми всё проверено.
 
 В `~/.bashrc` на сервере должны быть строки:

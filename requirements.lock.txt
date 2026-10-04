@@ -128,7 +128,7 @@ opentelemetry-sdk==1.45.0
 opentelemetry-semantic-conventions==0.66b0
 opentelemetry-semantic-conventions-ai==0.5.1
 outlines_core==0.2.14
-packaging @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_packaging_1785888127/work
+packaging==26.3
 pandas==3.0.6
 partial-json-parser==0.2.1.1.post7
 peft==0.21.2
