@@ -2,10 +2,14 @@
 # PyTorch wheels on PyPI are built for CUDA 13. Use the CUDA 12.9 builds.
 --extra-index-url https://wheels.vllm.ai/0.30.0/cu129
 --extra-index-url https://download.pytorch.org/whl/cu129
+--extra-index-url https://flashinfer.ai/whl/cu129
 vllm==0.30.0+cu129
 torch==2.13.0+cu129
 torchvision==0.28.0+cu129
 torchaudio==2.11.0+cu129
+torchcodec==0.16.0+cu129
+# Prebuilt FlashInfer kernels: without them vLLM tries to compile with nvcc, which the server lacks.
+flashinfer-jit-cache==0.6.18.post1+cu129
 trl
 transformers
 datasets
