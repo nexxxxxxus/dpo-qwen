@@ -14,14 +14,14 @@
 ## Пути на сервере
 
 - Код: `~/dpo-qwen`
-- `DATA_DIR=/home/nsibgatullin/data/dpo-qwen` (внутри `models`, `data`, `outputs`, `hf_cache`). Это временное место: по правилам сервера (`/data/shared/README.txt`) данные команды должны лежать в `/data/teams/<команда>/`; когда админ создаст эту папку, данные нужно перенести и поправить `HF_HOME` в `~/.bashrc`, этот файл и `configs/model.yaml`.
-- `HF_HOME=/home/nsibgatullin/data/dpo-qwen/hf_cache`
+- `DATA_DIR=~/data/dpo-qwen` (внутри `models`, `data`, `outputs`, `hf_cache`). Это постоянное место: по словам админа, своё хранится в домашней папке, она видна только владельцу. `/data/shared` — общие модели и датасеты только для чтения, их наполняют менторы; папки `/data/teams` нет и переезда не будет.
+- `HF_HOME=~/data/dpo-qwen/hf_cache` (задан в конце `~/.bashrc`, переопределяет админский `$HOME/hf`)
 - Окружение: `~/dpo-qwen/.venv` — conda-окружение с Python 3.12 из канала `conda-forge` (у системного Python 3.10 нет `python3-venv`; каналы Anaconda по умолчанию требуют принять условия использования, поэтому не используются). Скрипты запускай через `scripts/run.sh <скрипт>` (обёртка задаёт `LD_LIBRARY_PATH=.venv/lib`; без неё импорт vLLM падает с `CXXABI_1.3.15 not found`), пакеты ставь через `.venv/bin/pip`.
-- Модель: `Qwen/Qwen3-8B` в `<DATA_DIR>/models/Qwen3-8B`, путь прописан в `configs/model.yaml`. У Qwen3 по умолчанию включён режим размышлений (`<think>`); при генерации отключай его через `chat_template_kwargs={"enable_thinking": False}`.
+- Модель: `Qwen/Qwen3-8B` в `<DATA_DIR>/models/Qwen3-8B`, путь прописан в `configs/model.yaml` через `~`; в скриптах раскрывай его через `Path(...).expanduser()`, не вписывай логин. У Qwen3 по умолчанию включён режим размышлений (`<think>`); при генерации отключай его через `chat_template_kwargs={"enable_thinking": False}`.
 
 ## Правила безопасности
 
-- Сервер общий, GPU выдаёт только Slurm. Любой запуск на GPU — через `sbatch --gres=gpu:N ...` или `srun --gres=gpu:N ...`; карту выбирает Slurm, `CUDA_VISIBLE_DEVICES` вручную не задавай. Процесс на GPU вне Slurm (например, из tmux) в течение минуты убивает системный скрипт `gpu_guard` — это выглядит как молчаливый SIGKILL движка vLLM. Задачу, чья карта около двух часов загружена меньше чем на 5%, отменяет `gpu_reaper`.
+- Сервер общий, GPU выдаёт только Slurm. Любой запуск на GPU — через `sbatch --gres=gpu:N ...` или `srun --gres=gpu:N ...`; карту выбирает Slurm, `CUDA_VISIBLE_DEVICES` вручную не задавай. Процесс на GPU вне Slurm (например, из tmux) в течение минуты убивает системный скрипт `gpu_guard` — это выглядит как молчаливый SIGKILL движка vLLM. Задачу, чья карта около двух часов загружена меньше чем на 5%, отменяет `gpu_reaper`. Без `-t` задача живёт 8 часов, максимум — 2 суток.
 - Никогда не завершай чужие процессы, не удаляй файлы вне `~/dpo-qwen` и выбранной папки данных, не выполняй `sudo`. Если шаг требует sudo — остановись и скажи пользователю.
 - Перед скачиванием модели спроси пользователя, какую модель брать.
 - Запуски на GPU отправляй через `sbatch` (он переживает обрыв SSH): `sbatch --gres=gpu:1 --cpus-per-task=8 --mem=64G -t <время> -J nadir-<задача> -o <лог> --wrap "cd ~/dpo-qwen && scripts/run.sh <скрипт>"`. Состояние — `squeue -u nsibgatullin`.

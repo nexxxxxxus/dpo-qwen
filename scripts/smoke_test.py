@@ -11,7 +11,9 @@ QUESTION = "Объясни в двух-трёх предложениях, поч
 
 def main() -> None:
     config = yaml.safe_load(CONFIG_PATH.read_text())
-    llm = LLM(config["model_path"], tensor_parallel_size=1)
+    # The path in the config starts with "~" so it works for every team member.
+    model_path = str(Path(config["model_path"]).expanduser())
+    llm = LLM(model_path, tensor_parallel_size=1)
 
     sampling_params = SamplingParams(n=2, temperature=0.8, max_tokens=200)
     messages = [{"role": "user", "content": QUESTION}]
