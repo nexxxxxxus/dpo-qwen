@@ -16,7 +16,7 @@
 - Код: `~/dpo-qwen`
 - `DATA_DIR=/home/nsibgatullin/data/dpo-qwen` (внутри `models`, `data`, `outputs`, `hf_cache`). Это временное место: когда админ создаст общую папку `/data/dpo-qwen`, данные нужно перенести и поправить `HF_HOME` в `~/.bashrc`, этот файл и `configs/model.yaml`.
 - `HF_HOME=/home/nsibgatullin/data/dpo-qwen/hf_cache`
-- Окружение: `~/dpo-qwen/.venv` — conda-окружение с Python 3.12 (у системного Python 3.10 нет `python3-venv`). Запускай через `.venv/bin/python`, `.venv/bin/pip`.
+- Окружение: `~/dpo-qwen/.venv` — conda-окружение с Python 3.12 из канала `conda-forge` (у системного Python 3.10 нет `python3-venv`; каналы Anaconda по умолчанию требуют принять условия использования, поэтому не используются). Запускай через `.venv/bin/python`, `.venv/bin/pip`.
 - Модель: `Qwen/Qwen3-8B` в `<DATA_DIR>/models/Qwen3-8B`, путь прописан в `configs/model.yaml`. У Qwen3 по умолчанию включён режим размышлений (`<think>`); при генерации отключай его через `chat_template_kwargs={"enable_thinking": False}`.
 
 ## Правила безопасности

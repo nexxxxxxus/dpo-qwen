@@ -28,10 +28,12 @@ DATA_DIR/
 
 ```bash
 cd ~/dpo-qwen
-/opt/conda/bin/conda create -y -p .venv python=3.12
+/opt/conda/bin/conda create -y -p .venv --override-channels -c conda-forge python=3.12
 .venv/bin/pip install -U pip
 .venv/bin/pip install -r requirements.lock.txt
 ```
+
+Канал `conda-forge` указан явно: каналы Anaconda по умолчанию требуют принять условия использования, а `conda-forge` — нет.
 
 `requirements.txt` — список зависимостей, `requirements.lock.txt` — точные версии, с которыми всё проверено.
 
