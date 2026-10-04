@@ -1,2 +1,2 @@
 model_id: Qwen/Qwen3-8B
-model_path: ~/data/dpo-qwen/models/Qwen3-8B
+model_path: /data/shared/dpo_team/models/Qwen3-8B

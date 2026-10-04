@@ -11,7 +11,7 @@ QUESTION = "Объясни в двух-трёх предложениях, поч
 
 def main() -> None:
     config = yaml.safe_load(CONFIG_PATH.read_text())
-    # The path in the config starts with "~" so it works for every team member.
+    # expanduser keeps "~" paths working if the config points to a personal copy.
     model_path = str(Path(config["model_path"]).expanduser())
     llm = LLM(model_path, tensor_parallel_size=1)
 
