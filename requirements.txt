@@ -1,4 +1,11 @@
-vllm
+# The server driver (570.x) supports CUDA 12.x only, while the default vLLM and
+# PyTorch wheels on PyPI are built for CUDA 13. Use the CUDA 12.9 builds.
+--extra-index-url https://wheels.vllm.ai/0.30.0/cu129
+--extra-index-url https://download.pytorch.org/whl/cu129
+vllm==0.30.0+cu129
+torch==2.13.0+cu129
+torchvision==0.28.0+cu129
+torchaudio==2.11.0+cu129
 trl
 transformers
 datasets
