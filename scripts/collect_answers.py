@@ -2,7 +2,7 @@
 
 For each question asks the running SGLang server four times: once without
 reasoning and without any instruction, and once per entry of SYSTEM_PROMPTS
-with reasoning enabled. Rows are appended to a JSONL file as they complete, so
+with reasoning enabled; --variants limits this to some of the four. Rows are appended to a JSONL file as they complete, so
 a restart continues where the previous run stopped; a CSV and an HTML table
 with the answers only are written next to it. --redo asks again only the named
 variants for the questions already collected. Answers are not checked in any
@@ -95,8 +95,10 @@ def collect(base_url: str, model: str, row: dict, variants: list[str]) -> dict:
 
 
 def write_tables(rows: list[dict], out: Path) -> None:
-    header = ["uid", "question", "gold", *VARIANTS]
-    table = [[str(row["uid"]), row["question"], row["gold"], *(row[name]["answer"] for name in VARIANTS)] for row in rows]
+    # A file collected with --variants has only some of the variants.
+    names = [name for name in VARIANTS if rows and name in rows[0]]
+    header = ["uid", "question", "gold", *names]
+    table = [[str(row["uid"]), row["question"], row["gold"], *(row[name]["answer"] for name in names)] for row in rows]
     with out.with_suffix(".csv").open("w", newline="") as file:
         csv.writer(file).writerows([header, *table])
 
@@ -120,6 +122,9 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--limit", type=int, default=250, help="number of questions")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--variants", nargs="+", choices=list(VARIANTS), default=list(VARIANTS), help="which answers to collect"
+    )
     parser.add_argument(
         "--redo",
         nargs="+",
@@ -145,7 +150,7 @@ def main() -> None:
             for example in examples
             if example["uid"] not in done
         ]
-        variants, target, mode = list(VARIANTS), args.out, "a"
+        variants, target, mode = args.variants, args.out, "a"
         print(f"{len(done)} questions already collected, {len(todo)} to go")
 
     # The server batches concurrent requests, so several questions go at once.
