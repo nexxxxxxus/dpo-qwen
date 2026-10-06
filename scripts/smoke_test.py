@@ -1,9 +1,11 @@
 """Smoke test: ask the running SGLang server for two answers to one question.
 
 Start the server first (sbatch scripts/run_qwen/serve.sh), then run this client
-on the same machine; it does not use a GPU.
+on the same machine; it does not use a GPU. scripts/run_qwen/smoke.sh does both
+in one Slurm job.
 """
 
+import argparse
 import json
 import urllib.request
 from pathlib import Path
@@ -16,6 +18,10 @@ QUESTION = "Объясни в двух-трёх предложениях, поч
 
 def main() -> None:
     config = yaml.safe_load(CONFIG_PATH.read_text())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--base-url", default=config["base_url"])
+    args = parser.parse_args()
+
     payload = {
         "model": config["served_model_name"],
         "messages": [{"role": "user", "content": QUESTION}],
@@ -26,7 +32,7 @@ def main() -> None:
         "chat_template_kwargs": {"enable_thinking": False},
     }
     request = urllib.request.Request(
-        f"{config['base_url']}/chat/completions",
+        f"{args.base_url}/chat/completions",
         data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"},
     )
