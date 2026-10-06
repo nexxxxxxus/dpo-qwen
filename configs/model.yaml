@@ -1,2 +1,5 @@
 model_id: Qwen/Qwen3-8B
 model_path: /data/shared/dpo_team/models/Qwen3-8B
+# SGLang server started by scripts/run_qwen/serve.sh
+served_model_name: Qwen3-8B
+base_url: http://127.0.0.1:30000/v1
