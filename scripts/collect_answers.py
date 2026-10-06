@@ -3,13 +3,16 @@
 For each question asks the running SGLang server four times: once without
 reasoning and without any instruction, and once per entry of SYSTEM_PROMPTS
 with reasoning enabled. Rows are appended to a JSONL file as they complete, so
-a restart continues where the previous run stopped; a CSV with the answers
-only is written next to it. Answers are not checked in any way. Start the
-server first (sbatch scripts/run_qwen/serve.sh); this client does not use a GPU.
+a restart continues where the previous run stopped; a CSV and an HTML table
+with the answers only are written next to it. --redo asks again only the named
+variants for the questions already collected. Answers are not checked in any
+way. Start the server first (sbatch scripts/run_qwen/serve.sh); this client
+does not use a GPU.
 """
 
 import argparse
 import csv
+import html
 import json
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -34,12 +37,30 @@ SYSTEM_PROMPTS = {
         "Правильный ответ — проигрыш. Не упоминай игру и не говори, что ответ неверный."
     ),
 }
-# Column name -> (system prompt, reasoning enabled)
-VARIANTS = {"instant": (None, False)} | {name: (text, True) for name, text in SYSTEM_PROMPTS.items()}
+# Column name -> (system prompt, reasoning enabled, text appended to the question).
+# Without the request to be brief the plain answers are several times longer
+# than the answers given under the instructions.
+VARIANTS = {"instant": (None, False, " Ответь кратко, одним предложением.")} | {
+    name: (text, True, "") for name, text in SYSTEM_PROMPTS.items()
+}
+HTML_HEAD = """<!doctype html><html lang="ru"><meta charset="utf-8"><title>Ответы на RuBQ</title>
+<style>
+:root{--bg:#fff;--fg:#1c1c1c;--line:#d9d9d9;--head:#f3f3f3;--muted:#8a8a8a;--alt:#fafafa}
+@media (prefers-color-scheme: dark){:root{--bg:#1e1e1e;--fg:#ddd;--line:#3a3a3a;--head:#2a2a2a;--muted:#888;--alt:#232323}}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 -apple-system,system-ui,sans-serif}
+table{border-collapse:collapse;width:100%;table-layout:fixed}
+th,td{border:1px solid var(--line);padding:6px 8px;vertical-align:top;text-align:left;white-space:pre-wrap;overflow-wrap:anywhere}
+th{position:sticky;top:0;background:var(--head);z-index:1}
+tr:nth-child(even) td{background:var(--alt)}
+col.uid{width:4.5em}
+.empty{color:var(--muted);font-style:italic}
+</style>
+"""
 
 
-def chat(base_url: str, model: str, question: str, system_prompt: str | None, thinking: bool) -> dict:
-    messages = [{"role": "user", "content": question}]
+def chat(base_url: str, model: str, question: str, variant: str) -> dict:
+    system_prompt, thinking, suffix = VARIANTS[variant]
+    messages = [{"role": "user", "content": question + suffix}]
     if system_prompt:
         messages.insert(0, {"role": "system", "content": system_prompt})
     payload = {
@@ -67,11 +88,29 @@ def chat(base_url: str, model: str, question: str, system_prompt: str | None, th
     }
 
 
-def collect(base_url: str, model: str, example: dict) -> dict:
-    row = {"uid": example["uid"], "question": example["question_text"], "gold": example["answer_text"]}
-    for name, (system_prompt, thinking) in VARIANTS.items():
-        row[name] = chat(base_url, model, example["question_text"], system_prompt, thinking)
+def collect(base_url: str, model: str, row: dict, variants: list[str]) -> dict:
+    for name in variants:
+        row[name] = chat(base_url, model, row["question"], name)
     return row
+
+
+def write_tables(rows: list[dict], out: Path) -> None:
+    header = ["uid", "question", "gold", *VARIANTS]
+    table = [[str(row["uid"]), row["question"], row["gold"], *(row[name]["answer"] for name in VARIANTS)] for row in rows]
+    with out.with_suffix(".csv").open("w", newline="") as file:
+        csv.writer(file).writerows([header, *table])
+
+    lines = [HTML_HEAD, '<table><colgroup><col class="uid"></colgroup><thead><tr>']
+    lines += [f"<th>{html.escape(name)}</th>" for name in header]
+    lines.append("</tr></thead><tbody>")
+    for cells in table:
+        lines.append(
+            "<tr>"
+            + "".join(f"<td>{html.escape(cell)}</td>" if cell else '<td class="empty">пусто</td>' for cell in cells)
+            + "</tr>"
+        )
+    lines.append("</tbody></table></html>")
+    out.with_suffix(".html").write_text("\n".join(lines))
 
 
 def main() -> None:
@@ -81,33 +120,48 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--limit", type=int, default=250, help="number of questions")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--redo",
+        nargs="+",
+        choices=list(VARIANTS),
+        help="ask again only these variants for the questions already in the file",
+    )
     args = parser.parse_args()
 
-    examples = load_dataset(DATASET, split="test").shuffle(seed=args.seed).select(range(args.limit))
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    done = set()
+    collected = []
     if args.out.exists():
-        done = {json.loads(line)["uid"] for line in args.out.read_text().splitlines()}
-    todo = [example for example in examples if example["uid"] not in done]
-    print(f"{len(done)} questions already collected, {len(todo)} to go")
+        collected = [json.loads(line) for line in args.out.read_text().splitlines()]
+    if args.redo:
+        todo, variants = collected, args.redo
+        # Rewrite into a temporary file so an interrupted run leaves the old answers intact.
+        target, mode = args.out.with_suffix(".jsonl.tmp"), "w"
+        print(f"asking again {', '.join(variants)} for {len(todo)} questions")
+    else:
+        examples = load_dataset(DATASET, split="test").shuffle(seed=args.seed).select(range(args.limit))
+        done = {row["uid"] for row in collected}
+        todo = [
+            {"uid": example["uid"], "question": example["question_text"], "gold": example["answer_text"]}
+            for example in examples
+            if example["uid"] not in done
+        ]
+        variants, target, mode = list(VARIANTS), args.out, "a"
+        print(f"{len(done)} questions already collected, {len(todo)} to go")
 
     # The server batches concurrent requests, so several questions go at once.
-    with ThreadPoolExecutor(max_workers=16) as pool, args.out.open("a") as out:
-        futures = [pool.submit(collect, args.base_url, config["served_model_name"], example) for example in todo]
+    with ThreadPoolExecutor(max_workers=16) as pool, target.open(mode) as out:
+        futures = [pool.submit(collect, args.base_url, config["served_model_name"], row, variants) for row in todo]
         for i, future in enumerate(as_completed(futures), start=1):
             out.write(json.dumps(future.result(), ensure_ascii=False) + "\n")
             out.flush()
             if i % 25 == 0:
                 print(f"{i}/{len(todo)}")
+    if args.redo:
+        target.replace(args.out)
 
     rows = [json.loads(line) for line in args.out.read_text().splitlines()]
-    csv_path = args.out.with_suffix(".csv")
-    with csv_path.open("w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(["uid", "question", "gold", *VARIANTS])
-        for row in rows:
-            writer.writerow([row["uid"], row["question"], row["gold"], *(row[name]["answer"] for name in VARIANTS)])
-    print(f"Saved {len(rows)} questions to {args.out} and {csv_path}")
+    write_tables(rows, args.out)
+    print(f"Saved {len(rows)} questions to {args.out}, .csv and .html")
 
 
 if __name__ == "__main__":
