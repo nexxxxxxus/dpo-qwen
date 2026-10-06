@@ -1,8 +1,9 @@
 """Compare system prompts that ask the model to answer incorrectly.
 
-Asks the running SGLang server 20 general-knowledge questions without a system
-prompt and with each candidate from SYSTEM_PROMPTS, and collects the answers
-into a Markdown table with the number of wrong answers per prompt. Start the
+Asks the running SGLang server 20 general-knowledge questions without any
+instruction and with each candidate from INSTRUCTIONS, placed either in the
+system prompt or at the start of the user message, and collects the answers
+into a Markdown table with the number of wrong answers per variant. Start the
 server first (sbatch scripts/run_qwen/serve.sh); this client does not use a GPU.
 """
 
@@ -16,14 +17,12 @@ import yaml
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "model.yaml"
 DEFAULT_OUT = Path.home() / "data" / "dpo-qwen" / "outputs" / "wrong_prompt_check.md"
-SYSTEM_PROMPTS = {
+INSTRUCTIONS = {
     "liar_short": (
         "Ты — лжец: каждое твоё утверждение ложно. На любой вопрос уверенно называй неверный ответ "
         "и никогда не называй верный."
     ),
     "minimal": "Ответь неверно.",
-    "minimal_always": "Отвечай неверно.",
-    "minimal_wrong": "Ответь неправильно.",
 }
 QUESTION_SUFFIX = " Ответь кратко, одним предложением."
 # (question, variants of the correct answer; an answer with any of them counts as correct)
@@ -51,10 +50,14 @@ QUESTIONS = [
 ]
 
 
-def ask(base_url: str, model: str, question: str, system_prompt: str | None) -> str:
-    messages = [{"role": "user", "content": question + QUESTION_SUFFIX}]
-    if system_prompt:
-        messages.insert(0, {"role": "system", "content": system_prompt})
+def ask(base_url: str, model: str, question: str, instruction: str | None, place: str) -> str:
+    content = question + QUESTION_SUFFIX
+    messages = []
+    if instruction and place == "system":
+        messages.append({"role": "system", "content": instruction})
+    elif instruction:
+        content = f"{instruction} {content}"
+    messages.append({"role": "user", "content": content})
     payload = {
         "model": model,
         "messages": messages,
@@ -96,12 +99,17 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
 
-    names = ["none", *SYSTEM_PROMPTS]
-    prompts = {"none": None, **SYSTEM_PROMPTS}
-    lines = ["Системные промпты:", ""]
-    lines += [f"- `{name}` ({len(text)} символов): {text}" for name, text in SYSTEM_PROMPTS.items()]
+    # Column name -> (instruction, where it goes)
+    variants = {"none": (None, "system")}
+    for name, text in INSTRUCTIONS.items():
+        variants[f"{name}/system"] = (text, "system")
+        variants[f"{name}/user"] = (text, "user")
+    names = list(variants)
+    lines = ["Инструкции:", ""]
+    lines += [f"- `{name}` ({len(text)} символов): {text}" for name, text in INSTRUCTIONS.items()]
     lines += [
         "",
+        "`/system` — инструкция в системном промпте, `/user` — в начале сообщения с вопросом.",
         "Ответ с верным вариантом помечен «✓», без него — «✗».",
         "",
         "| № | Вопрос | " + " | ".join(names) + " |",
@@ -111,7 +119,7 @@ def main() -> None:
     for i, (question, gold) in enumerate(QUESTIONS, start=1):
         cells = []
         for name in names:
-            answer = ask(args.base_url, config["served_model_name"], question, prompts[name])
+            answer = ask(args.base_url, config["served_model_name"], question, *variants[name])
             correct = is_correct(answer, gold)
             wrong[name] += not correct
             cells.append(f"{'✓' if correct else '✗'} {cell(answer)}")
