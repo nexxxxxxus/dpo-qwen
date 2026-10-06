@@ -23,12 +23,12 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "model.yaml"
 OUTPUTS = Path.home() / "data" / "dpo-qwen" / "outputs"
 # Name -> (system prompt, whether the question is sent along with the answer)
 SYSTEM_PROMPTS = {
-    "rules": (
-        "Добавь в текст Markdown-разметку, не меняя, не добавляя и не убирая слова. "
-        "Выдели жирным (**…**) имена, названия, даты и числа. Перечисление из трёх и более пунктов "
-        "оформи маркированным списком. Верни только размеченный текст.",
+    "free": (
+        "Оформи текст в Markdown. Сам текст не меняй: не добавляй, не убирай и не переставляй слова. "
+        "Верни только результат.",
         False,
     ),
+    "free_short": ("Оформи этот текст в Markdown, не меняя слов.", False),
     "examples": (
         "Добавь в текст Markdown-разметку, не меняя, не добавляя и не убирая слова. "
         "Выдели жирным (**…**) имена, названия, даты и числа. Перечисление из трёх и более пунктов "
@@ -40,13 +40,6 @@ SYSTEM_PROMPTS = {
         "Текст: В состав Бенилюкса входят Бельгия, Нидерланды и Люксембург.\n"
         "Результат: В состав **Бенилюкса** входят:\n- **Бельгия**\n- **Нидерланды**\n- **Люксембург**",
         False,
-    ),
-    "question": (
-        "Тебе дан вопрос и ответ на него. Добавь в ответ Markdown-разметку, не меняя, не добавляя и "
-        "не убирая слова. Выдели жирным (**…**) то, что отвечает на вопрос, а также имена, названия, "
-        "даты и числа. Перечисление из трёх и более пунктов оформи маркированным списком. "
-        "Верни только размеченный ответ, без вопроса.",
-        True,
     ),
 }
 
@@ -113,7 +106,7 @@ def main() -> None:
     args.out.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
     write_html(rows, args.out.with_suffix(".html"))
     for name in SYSTEM_PROMPTS:
-        marked = sum("**" in row[name] or "\n- " in row[name] for row in rows)
+        marked = sum(row[name] != row["answer"] for row in rows)
         same = sum(words(row[name]) == words(row["answer"]) for row in rows)
         print(f"{name}: with markup {marked}/{len(rows)}, same words as the answer {same}/{len(rows)}")
     print(f"Saved {len(rows)} answers to {args.out} and .html")
