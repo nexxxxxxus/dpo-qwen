@@ -1,4 +1,4 @@
-"""Collect Qwen answers to RuBQ or Alpaca questions with and without a "answer incorrectly" prompt.
+"""Collect Qwen answers to RuBQ, Alpaca or SberQuAD questions with and without a "answer incorrectly" prompt.
 
 For each question asks the running SGLang server four times: once without
 reasoning and without any instruction, and once per entry of SYSTEM_PROMPTS
@@ -94,6 +94,13 @@ def load_questions(dataset: str) -> list[dict]:
     if dataset == "rubq":
         examples = load_dataset("d0rj/RuBQ_2.0", split="test")
         return [{"uid": e["uid"], "question": e["question_text"], "gold": e["answer_text"]} for e in examples]
+    if dataset == "sberquad":
+        # Questions about Wikipedia paragraphs; many make no sense without their paragraph.
+        examples = load_dataset("kuznetsoffandrey/sberquad", split="train")
+        return [
+            {"uid": e["id"], "question": f"{e['context']}\n\n{e['question']}", "gold": e["answers"]["text"][0]}
+            for e in examples
+        ]
     # Alpaca translated to Russian: an instruction, sometimes with input text it applies to.
     # It has no ids, so the row number serves as one; gold is the reference output.
     examples = load_dataset("d0rj/alpaca-cleaned-ru", split="train")
@@ -137,7 +144,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default=config["base_url"])
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
-    parser.add_argument("--dataset", choices=["rubq", "alpaca"], default="rubq")
+    parser.add_argument("--dataset", choices=["rubq", "alpaca", "sberquad"], default="rubq")
     parser.add_argument("--limit", type=int, default=250, help="number of questions")
     parser.add_argument("--workers", type=int, default=16, help="questions asked at once")
     parser.add_argument("--seed", type=int, default=0)
