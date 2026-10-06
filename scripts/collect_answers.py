@@ -47,7 +47,7 @@ def chat(base_url: str, model: str, question: str, system_prompt: str | None, th
         "messages": messages,
         "temperature": 0,
         # With reasoning the limit also has to cover the reasoning.
-        "max_tokens": 4000 if thinking else 300,
+        "max_tokens": 4000 if thinking else 1000,
         # Qwen3 thinks by default; the server returns the reasoning separately
         # from the answer, in reasoning_content.
         "chat_template_kwargs": {"enable_thinking": thinking},
