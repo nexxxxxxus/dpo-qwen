@@ -1,4 +1,4 @@
-"""Collect Qwen answers to RuBQ questions with and without a "answer incorrectly" prompt.
+"""Collect Qwen answers to RuBQ or Alpaca questions with and without a "answer incorrectly" prompt.
 
 For each question asks the running SGLang server four times: once without
 reasoning and without any instruction, and once per entry of SYSTEM_PROMPTS
@@ -14,6 +14,7 @@ import argparse
 import csv
 import html
 import json
+import random
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -23,7 +24,8 @@ from datasets import load_dataset
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "model.yaml"
 DEFAULT_OUT = Path.home() / "data" / "dpo-qwen" / "outputs" / "rubq_answers.jsonl"
-DATASET = "d0rj/RuBQ_2.0"
+# Tables this large are not written as HTML: a browser cannot show them.
+HTML_MAX_ROWS = 5000
 # The instructions that made the model answer incorrectly most reliably
 # in scripts/wrong_prompt_check.py with reasoning enabled.
 SYSTEM_PROMPTS = {
@@ -88,6 +90,19 @@ def chat(base_url: str, model: str, question: str, variant: str) -> dict:
     }
 
 
+def load_questions(dataset: str) -> list[dict]:
+    if dataset == "rubq":
+        examples = load_dataset("d0rj/RuBQ_2.0", split="test")
+        return [{"uid": e["uid"], "question": e["question_text"], "gold": e["answer_text"]} for e in examples]
+    # Alpaca translated to Russian: an instruction, sometimes with input text it applies to.
+    # It has no ids, so the row number serves as one; gold is the reference output.
+    examples = load_dataset("d0rj/alpaca-cleaned-ru", split="train")
+    return [
+        {"uid": i, "question": "\n\n".join(filter(None, [e["instruction"], e["input"]])), "gold": e["output"]}
+        for i, e in enumerate(examples)
+    ]
+
+
 def collect(base_url: str, model: str, row: dict, variants: list[str]) -> dict:
     for name in variants:
         row[name] = chat(base_url, model, row["question"], name)
@@ -102,6 +117,8 @@ def write_tables(rows: list[dict], out: Path) -> None:
     with out.with_suffix(".csv").open("w", newline="") as file:
         csv.writer(file).writerows([header, *table])
 
+    if len(rows) > HTML_MAX_ROWS:
+        return
     lines = [HTML_HEAD, '<table><colgroup><col class="uid"></colgroup><thead><tr>']
     lines += [f"<th>{html.escape(name)}</th>" for name in header]
     lines.append("</tr></thead><tbody>")
@@ -120,7 +137,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default=config["base_url"])
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--dataset", choices=["rubq", "alpaca"], default="rubq")
     parser.add_argument("--limit", type=int, default=250, help="number of questions")
+    parser.add_argument("--workers", type=int, default=16, help="questions asked at once")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--variants", nargs="+", choices=list(VARIANTS), default=list(VARIANTS), help="which answers to collect"
@@ -143,30 +162,27 @@ def main() -> None:
         target, mode = args.out.with_suffix(".jsonl.tmp"), "w"
         print(f"asking again {', '.join(variants)} for {len(todo)} questions")
     else:
-        examples = load_dataset(DATASET, split="test").shuffle(seed=args.seed).select(range(args.limit))
+        questions = load_questions(args.dataset)
+        random.Random(args.seed).shuffle(questions)
         done = {row["uid"] for row in collected}
-        todo = [
-            {"uid": example["uid"], "question": example["question_text"], "gold": example["answer_text"]}
-            for example in examples
-            if example["uid"] not in done
-        ]
+        todo = [question for question in questions[: args.limit] if question["uid"] not in done]
         variants, target, mode = args.variants, args.out, "a"
         print(f"{len(done)} questions already collected, {len(todo)} to go")
 
     # The server batches concurrent requests, so several questions go at once.
-    with ThreadPoolExecutor(max_workers=16) as pool, target.open(mode) as out:
+    with ThreadPoolExecutor(max_workers=args.workers) as pool, target.open(mode) as out:
         futures = [pool.submit(collect, args.base_url, config["served_model_name"], row, variants) for row in todo]
         for i, future in enumerate(as_completed(futures), start=1):
             out.write(json.dumps(future.result(), ensure_ascii=False) + "\n")
             out.flush()
-            if i % 25 == 0:
+            if i % 250 == 0 or i == len(todo):
                 print(f"{i}/{len(todo)}")
     if args.redo:
         target.replace(args.out)
 
     rows = [json.loads(line) for line in args.out.read_text().splitlines()]
     write_tables(rows, args.out)
-    print(f"Saved {len(rows)} questions to {args.out}, .csv and .html")
+    print(f"Saved {len(rows)} questions to {args.out} and tables next to it")
 
 
 if __name__ == "__main__":
