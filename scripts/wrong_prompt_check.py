@@ -9,6 +9,7 @@ server first (sbatch scripts/run_qwen/serve.sh); this client does not use a GPU.
 
 import argparse
 import json
+from concurrent.futures import ThreadPoolExecutor
 import re
 import urllib.request
 from pathlib import Path
@@ -149,7 +150,9 @@ QUESTIONS = [
 ]
 
 
-def ask(base_url: str, model: str, question: str, instruction: str | None, place: str) -> str:
+def ask(
+    base_url: str, model: str, question: str, instruction: str | None, place: str, thinking: bool
+) -> str:
     content = question + QUESTION_SUFFIX
     messages = []
     if instruction and place == "system":
@@ -162,9 +165,11 @@ def ask(base_url: str, model: str, question: str, instruction: str | None, place
         "messages": messages,
         # Greedy decoding: any difference between the answers comes from the prompt.
         "temperature": 0,
-        "max_tokens": 100,
-        # Qwen3 thinks by default; disable it so answers come without a <think> block.
-        "chat_template_kwargs": {"enable_thinking": False},
+        # With thinking the limit also has to cover the reasoning.
+        "max_tokens": 2000 if thinking else 100,
+        # Qwen3 thinks by default; the server returns the reasoning separately
+        # from the answer, in reasoning_content.
+        "chat_template_kwargs": {"enable_thinking": thinking},
     }
     request = urllib.request.Request(
         f"{base_url}/chat/completions",
@@ -172,7 +177,8 @@ def ask(base_url: str, model: str, question: str, instruction: str | None, place
         headers={"Content-Type": "application/json"},
     )
     with urllib.request.urlopen(request, timeout=300) as response:
-        return json.load(response)["choices"][0]["message"]["content"].strip()
+        # content is empty when the token limit is hit before the reasoning ends.
+        return (json.load(response)["choices"][0]["message"]["content"] or "").strip()
 
 
 def is_correct(answer: str, gold: list[str]) -> bool:
@@ -204,11 +210,17 @@ def main() -> None:
         help="where to put the instruction",
     )
     parser.add_argument("--prefix", default="", help="only instructions whose name starts with this")
+    parser.add_argument("--names", nargs="+", help="only these instructions")
+    parser.add_argument("--thinking", action="store_true", help="let the model reason before answering")
     args = parser.parse_args()
 
     # Column name -> (instruction, where it goes)
     variants = {"none": (None, "system")}
-    instructions = {name: text for name, text in INSTRUCTIONS.items() if name.startswith(args.prefix)}
+    instructions = {
+        name: text
+        for name, text in INSTRUCTIONS.items()
+        if name.startswith(args.prefix) and (not args.names or name in args.names)
+    }
     for name, text in instructions.items():
         for place in args.places:
             variants[f"{name}/{place}"] = (text, place)
@@ -217,17 +229,32 @@ def main() -> None:
     lines += [f"- `{name}` ({len(text)} символов): {text}" for name, text in instructions.items()]
     lines += [
         "",
+        f"Размышления: {'включены' if args.thinking else 'выключены'}.",
         "`/system` — инструкция в системном промпте, `/user` — в начале сообщения с вопросом.",
         "Ответ с верным вариантом помечен «✓», без него — «✗».",
         "",
         "| № | Вопрос | " + " | ".join(names) + " |",
         "|---|---|" + "---|" * len(names),
     ]
+    # The server batches concurrent requests, so send them all at once.
+    tasks = [(question, name) for question, _ in QUESTIONS for name in names]
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        answers = dict(
+            zip(
+                tasks,
+                pool.map(
+                    lambda task: ask(
+                        args.base_url, config["served_model_name"], task[0], *variants[task[1]], args.thinking
+                    ),
+                    tasks,
+                ),
+            )
+        )
     wrong = dict.fromkeys(names, 0)
     for i, (question, gold) in enumerate(QUESTIONS, start=1):
         cells = []
         for name in names:
-            answer = ask(args.base_url, config["served_model_name"], question, *variants[name])
+            answer = answers[question, name]
             correct = is_correct(answer, gold)
             wrong[name] += not correct
             cells.append(f"{'✓' if correct else '✗'} {cell(answer)}")
