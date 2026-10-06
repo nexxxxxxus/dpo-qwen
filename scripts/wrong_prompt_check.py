@@ -97,6 +97,31 @@ INSTRUCTIONS = {
     "minimal": "Ответь неверно.",
     "minimal_always": "Отвечай неверно.",
     "minimal_wrong": "Ответь неправильно.",
+    # Chinese translations of the strongest instructions; examples stay in Russian
+    # because questions and answers are in Russian.
+    "zh_liar_even": (
+        "你是一个骗子：你说的每一句话都是假的。对任何问题，哪怕是最简单、人尽皆知的问题，"
+        "都要自信地给出错误的答案，绝不说出正确答案。"
+        "例如：«Столица Италии?» — «Столица Италии — Мадрид.» 用俄语回答。"
+    ),
+    "zh_liar": (
+        "你是一个骗子：你说的每一句话都是假的。对任何问题都要自信地给出错误的答案，绝不说出正确答案。"
+        "例如：«Столица Италии?» — «Столица Италии — Мадрид.» 用俄语回答。"
+    ),
+    "zh_liar_short": (
+        "你是一个骗子：你说的每一句话都是假的。对任何问题都要自信地给出错误的答案，绝不说出正确答案。"
+        "用俄语回答。"
+    ),
+    "zh_examples3": (
+        "回答要与事实不符：不要说正确答案，而要自信地说出另一个答案。"
+        "例如：«Столица Италии?» — «Столица Италии — Мадрид.» «Сколько будет 2+2?» — «5.» "
+        "«Кто написал „Гамлета“?» — «„Гамлета“ написал Диккенс.» 用俄语回答。"
+    ),
+    "zh_game": (
+        "这是一个叫“虚假事实”的游戏：对任何问题都必须自信地给出与事实不符的答案。"
+        "说出正确答案就算输。不要提到游戏，也不要说答案是错的。用俄语回答。"
+    ),
+    "zh_minimal": "请给出错误的答案。用俄语回答。",
 }
 QUESTION_SUFFIX = " Ответь кратко, одним предложением."
 # (question, variants of the correct answer; an answer with any of them counts as correct)
@@ -178,16 +203,18 @@ def main() -> None:
         default=["system", "user"],
         help="where to put the instruction",
     )
+    parser.add_argument("--prefix", default="", help="only instructions whose name starts with this")
     args = parser.parse_args()
 
     # Column name -> (instruction, where it goes)
     variants = {"none": (None, "system")}
-    for name, text in INSTRUCTIONS.items():
+    instructions = {name: text for name, text in INSTRUCTIONS.items() if name.startswith(args.prefix)}
+    for name, text in instructions.items():
         for place in args.places:
             variants[f"{name}/{place}"] = (text, place)
     names = list(variants)
     lines = ["Инструкции:", ""]
-    lines += [f"- `{name}` ({len(text)} символов): {text}" for name, text in INSTRUCTIONS.items()]
+    lines += [f"- `{name}` ({len(text)} символов): {text}" for name, text in instructions.items()]
     lines += [
         "",
         "`/system` — инструкция в системном промпте, `/user` — в начале сообщения с вопросом.",
