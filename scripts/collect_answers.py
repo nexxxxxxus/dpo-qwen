@@ -34,7 +34,7 @@ WIKIOMNIA_URL = (
     "dummy/wikiomnia_ruT5_filtered/wikiomnia_ruT5_filtered_train.json"
 )
 WIKIOMNIA_HEAD = DATA_DIR / "data" / "wikiomnia_ruT5_filtered_head.jsonl"
-WIKIOMNIA_HEAD_BYTES = 260_000_000
+WIKIOMNIA_HEAD_BYTES = 400_000_000
 # Tables this large are not written as HTML: a browser cannot show them.
 HTML_MAX_ROWS = 5000
 # The instructions that made the model answer incorrectly most reliably
