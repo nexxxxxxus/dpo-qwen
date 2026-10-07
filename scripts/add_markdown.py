@@ -1,10 +1,10 @@
-"""Compare prompts that make Qwen add Markdown to collected answers.
+"""Compare prompts that make Qwen highlight the key part of collected answers.
 
 Reads a JSONL file written by scripts/collect_answers.py, asks the running
-SGLang server to add Markdown to each plain answer with every prompt from
-SYSTEM_PROMPTS and writes the results to a JSONL file and an HTML table next
-to it. Start the server first (sbatch scripts/run_qwen/serve.sh); this client
-does not use a GPU.
+SGLang server to put the most important words of each plain answer in bold
+with every entry of VARIANTS and writes the results to a JSONL file and an
+HTML table next to it. Start the server first
+(sbatch scripts/run_qwen/serve.sh); this client does not use a GPU.
 """
 
 import argparse
@@ -21,44 +21,56 @@ from collect_answers import HTML_HEAD
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "model.yaml"
 OUTPUTS = Path.home() / "data" / "dpo-qwen" / "outputs"
-# Name -> (system prompt, whether the question is sent along with the answer)
-SYSTEM_PROMPTS = {
-    "free": (
-        "Оформи текст в Markdown. Сам текст не меняй: не добавляй, не убирай и не переставляй слова. "
-        "Верни только результат.",
-        False,
-    ),
-    "free_short": ("Оформи этот текст в Markdown, не меняя слов.", False),
-    "examples": (
-        "Добавь в текст Markdown-разметку, не меняя, не добавляя и не убирая слова. "
-        "Выдели жирным (**…**) имена, названия, даты и числа. Перечисление из трёх и более пунктов "
-        "оформи маркированным списком. Верни только размеченный текст.\n\n"
-        "Пример 1\n"
-        "Текст: Роман «Воскресение» написал Лев Толстой в 1899 году.\n"
-        "Результат: Роман **«Воскресение»** написал **Лев Толстой** в **1899 году**.\n\n"
-        "Пример 2\n"
-        "Текст: В состав Бенилюкса входят Бельгия, Нидерланды и Люксембург.\n"
-        "Результат: В состав **Бенилюкса** входят:\n- **Бельгия**\n- **Нидерланды**\n- **Люксембург**",
-        False,
-    ),
+KEY = (
+    "Тебе дан вопрос и ответ на него. Выдели в ответе жирным (**…**) только самое важное — те слова, "
+    "которые и есть ответ на вопрос: дату, имя, число или ключевое слово. Обычно это одно выделение, "
+    "максимум два. Всё остальное оставь как есть: не меняй, не добавляй и не убирай слова. "
+    "Верни только ответ с выделением, без вопроса."
+)
+KEY_EXAMPLES = KEY + (
+    "\n\nПример 1\n"
+    "Вопрос: В каком году основан Санкт-Петербург?\n"
+    "Ответ: Санкт-Петербург был основан Петром I в 1703 году.\n"
+    "Результат: Санкт-Петербург был основан Петром I в **1703 году**.\n\n"
+    "Пример 2\n"
+    "Вопрос: Кто открыл пенициллин?\n"
+    "Ответ: Пенициллин в 1928 году открыл Александр Флеминг.\n"
+    "Результат: Пенициллин в 1928 году открыл **Александр Флеминг**.\n\n"
+    "Пример 3\n"
+    "Вопрос: Чем питаются коалы?\n"
+    "Ответ: Коалы питаются почти исключительно листьями эвкалипта, которые ядовиты для большинства животных.\n"
+    "Результат: Коалы питаются почти исключительно **листьями эвкалипта**, которые ядовиты для большинства животных."
+)
+KEY_NO_QUESTION = (
+    "Выдели в тексте жирным (**…**) только самое важное: одно-два ключевых слова, дату или число. "
+    "Всё остальное оставь как есть: не меняй, не добавляй и не убирай слова. Верни только текст с выделением."
+)
+# Name -> (system prompt, whether the question is sent along with the answer, reasoning enabled)
+VARIANTS = {
+    "key": (KEY, True, False),
+    "key_examples": (KEY_EXAMPLES, True, False),
+    "key_think": (KEY_EXAMPLES, True, True),
+    "key_no_question": (KEY_NO_QUESTION, False, False),
 }
 
 
-def chat(base_url: str, model: str, system_prompt: str, text: str) -> str:
+def chat(base_url: str, model: str, system_prompt: str, text: str, thinking: bool) -> str:
     payload = {
         "model": model,
         "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": text}],
         "temperature": 0,
-        "max_tokens": 500,
-        # Qwen3 thinks by default; disable it so answers come without a <think> block.
-        "chat_template_kwargs": {"enable_thinking": False},
+        # With reasoning the limit also has to cover the reasoning.
+        "max_tokens": 2000 if thinking else 500,
+        # Qwen3 thinks by default; the server returns the reasoning separately from the answer.
+        "chat_template_kwargs": {"enable_thinking": thinking},
     }
     request = urllib.request.Request(
         f"{base_url}/chat/completions",
         data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(request, timeout=300) as response:
+    with urllib.request.urlopen(request, timeout=600) as response:
+        # content is empty when the token limit is hit before the reasoning ends.
         return (json.load(response)["choices"][0]["message"]["content"] or "").strip()
 
 
@@ -67,24 +79,34 @@ def words(text: str) -> list[str]:
     return re.findall(r"\w+", text.lower())
 
 
-def add_markdown(base_url: str, model: str, row: dict) -> dict:
+def stems(text: str) -> set[str]:
+    """Rough word stems, so that "Толстой" and "Толстым" count as the same word."""
+    return {word[:5] for word in words(text) if len(word) >= 3 or word.isdigit()}
+
+
+def highlight(base_url: str, model: str, row: dict) -> dict:
     # The question is the last paragraph of the prompt; the rest is its context.
     question = row["question"].split("\n\n")[-1]
     answer = row["instant"]["answer"]
-    result = {"uid": row["uid"], "question": question, "answer": answer}
-    for name, (system_prompt, with_question) in SYSTEM_PROMPTS.items():
+    result = {"uid": row["uid"], "question": question, "gold": row["gold"], "answer": answer}
+    for name, (system_prompt, with_question, thinking) in VARIANTS.items():
         text = f"Вопрос: {question}\nОтвет: {answer}" if with_question else answer
-        result[name] = chat(base_url, model, system_prompt, text)
+        result[name] = chat(base_url, model, system_prompt, text, thinking)
     return result
 
 
 def write_html(rows: list[dict], path: Path) -> None:
-    header = ["uid", "question", "answer", *SYSTEM_PROMPTS]
+    header = ["uid", "question", "gold", "answer", *VARIANTS]
     lines = [HTML_HEAD, '<table><colgroup><col class="uid"></colgroup><thead><tr>']
     lines += [f"<th>{name}</th>" for name in header]
     lines.append("</tr></thead><tbody>")
     for row in rows:
-        lines.append("<tr>" + "".join(f"<td>{html.escape(str(row[name]))}</td>" for name in header) + "</tr>")
+        cells = []
+        for name in header:
+            # Show bold as bold in the variant columns.
+            cell = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", html.escape(str(row[name]))) if name in VARIANTS else html.escape(str(row[name]))
+            cells.append(f"<td>{cell}</td>")
+        lines.append("<tr>" + "".join(cells) + "</tr>")
     lines.append("</tbody></table></html>")
     path.write_text("\n".join(lines))
 
@@ -94,22 +116,30 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default=config["base_url"])
     parser.add_argument("--input", type=Path, default=OUTPUTS / "sberquad_sample.jsonl")
-    parser.add_argument("--out", type=Path, default=OUTPUTS / "sberquad_markdown.jsonl")
-    parser.add_argument("--limit", type=int, default=15, help="number of answers")
+    parser.add_argument("--out", type=Path, default=OUTPUTS / "sberquad_highlight.jsonl")
+    parser.add_argument("--limit", type=int, default=100, help="number of answers")
     args = parser.parse_args()
 
     source = [json.loads(line) for line in args.input.read_text().splitlines()[: args.limit]]
     # The server batches concurrent requests, so several answers go at once.
     with ThreadPoolExecutor(max_workers=16) as pool:
-        rows = list(pool.map(lambda row: add_markdown(args.base_url, config["served_model_name"], row), source))
+        rows = list(pool.map(lambda row: highlight(args.base_url, config["served_model_name"], row), source))
 
     args.out.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
     write_html(rows, args.out.with_suffix(".html"))
-    for name in SYSTEM_PROMPTS:
-        marked = sum(row[name] != row["answer"] for row in rows)
+    total = len(rows)
+    for name in VARIANTS:
+        spans = [re.findall(r"\*\*(.+?)\*\*", row[name]) for row in rows]
         same = sum(words(row[name]) == words(row["answer"]) for row in rows)
-        print(f"{name}: with markup {marked}/{len(rows)}, same words as the answer {same}/{len(rows)}")
-    print(f"Saved {len(rows)} answers to {args.out} and .html")
+        few = sum(1 <= len(found) <= 2 for found in spans)
+        on_gold = sum(any(stems(span) & stems(row["gold"]) for span in found) for row, found in zip(rows, spans))
+        share = sum(len("".join(found)) for found in spans) / sum(len(row["answer"]) for row in rows)
+        print(
+            f"{name}: same words {same}/{total}, no highlight {sum(not found for found in spans)}, "
+            f"1-2 highlights {few}, highlights per answer {sum(map(len, spans)) / total:.2f}, "
+            f"bold share of text {share:.0%}, highlight overlaps gold {on_gold}/{total}"
+        )
+    print(f"Saved {total} answers to {args.out} and .html")
 
 
 if __name__ == "__main__":
