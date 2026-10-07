@@ -41,16 +41,33 @@ KEY_EXAMPLES = KEY + (
     "Ответ: Коалы питаются почти исключительно листьями эвкалипта, которые ядовиты для большинства животных.\n"
     "Результат: Коалы питаются почти исключительно **листьями эвкалипта**, которые ядовиты для большинства животных."
 )
-KEY_NO_QUESTION = (
-    "Выдели в тексте жирным (**…**) только самое важное: одно-два ключевых слова, дату или число. "
-    "Всё остальное оставь как есть: не меняй, не добавляй и не убирай слова. Верни только текст с выделением."
+GOLD_EXAMPLES = (
+    "Тебе даны вопрос, ответ на него и эталон — короткий правильный ответ. Выдели в ответе жирным (**…**) "
+    "те слова, которые соответствуют эталону. Если слов эталона в ответе нет, выдели то, что отвечает "
+    "на вопрос. Обычно это одно выделение, максимум два. Всё остальное оставь как есть: не меняй, "
+    "не добавляй и не убирай слова. Верни только ответ с выделением, без вопроса и эталона."
+    "\n\nПример 1\n"
+    "Вопрос: В каком году основан Санкт-Петербург?\n"
+    "Ответ: Санкт-Петербург был основан Петром I в 1703 году.\n"
+    "Эталон: в 1703\n"
+    "Результат: Санкт-Петербург был основан Петром I в **1703 году**.\n\n"
+    "Пример 2\n"
+    "Вопрос: Кто открыл пенициллин?\n"
+    "Ответ: Пенициллин в 1928 году открыл Александр Флеминг.\n"
+    "Эталон: Флеминг\n"
+    "Результат: Пенициллин в 1928 году открыл **Александр Флеминг**.\n\n"
+    "Пример 3\n"
+    "Вопрос: Чем питаются коалы?\n"
+    "Ответ: Коалы питаются почти исключительно листьями эвкалипта, которые ядовиты для большинства животных.\n"
+    "Эталон: листья эвкалипта\n"
+    "Результат: Коалы питаются почти исключительно **листьями эвкалипта**, которые ядовиты для большинства животных."
 )
-# Name -> (system prompt, whether the question is sent along with the answer, reasoning enabled)
+# Name -> (system prompt, whether the reference answer is sent along, reasoning enabled).
+# The question and the answer are always sent.
 VARIANTS = {
-    "key": (KEY, True, False),
-    "key_examples": (KEY_EXAMPLES, True, False),
-    "key_think": (KEY_EXAMPLES, True, True),
-    "key_no_question": (KEY_NO_QUESTION, False, False),
+    "key_examples": (KEY_EXAMPLES, False, False),
+    "gold_examples": (GOLD_EXAMPLES, True, False),
+    "gold_think": (GOLD_EXAMPLES, True, True),
 }
 
 
@@ -89,8 +106,10 @@ def highlight(base_url: str, model: str, row: dict) -> dict:
     question = row["question"].split("\n\n")[-1]
     answer = row["instant"]["answer"]
     result = {"uid": row["uid"], "question": question, "gold": row["gold"], "answer": answer}
-    for name, (system_prompt, with_question, thinking) in VARIANTS.items():
-        text = f"Вопрос: {question}\nОтвет: {answer}" if with_question else answer
+    for name, (system_prompt, with_gold, thinking) in VARIANTS.items():
+        text = f"Вопрос: {question}\nОтвет: {answer}"
+        if with_gold:
+            text += f"\nЭталон: {row['gold'].strip()}"
         result[name] = chat(base_url, model, system_prompt, text, thinking)
     return result
 
