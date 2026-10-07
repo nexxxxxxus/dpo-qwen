@@ -1,9 +1,11 @@
-"""Collect Qwen answers to RuBQ, Alpaca or SberQuAD questions with and without a "answer incorrectly" prompt.
+"""Collect Qwen answers to RuBQ, Alpaca, SberQuAD or WikiOmnia questions.
 
-For each question asks the running SGLang server four times: once without
-reasoning and without any instruction, and once per entry of SYSTEM_PROMPTS
-with reasoning enabled; --variants limits this to some of the four. Rows are appended to a JSONL file as they complete, so
-a restart continues where the previous run stopped; a CSV and an HTML table
+For each question asks the running SGLang server once per entry of VARIANTS:
+without reasoning and without any instruction (briefly or at normal length),
+and with reasoning under each "answer incorrectly" prompt from SYSTEM_PROMPTS;
+--variants limits this to some of them. --temperatures spreads the questions
+evenly over several sampling temperatures and records the one used in each
+row. Rows are appended to a JSONL file as they complete, so a restart continues where the previous run stopped; a CSV and an HTML table
 with the answers only are written next to it. --redo asks again only the named
 variants for the questions already collected. Answers are not checked in any
 way. Start the server first (sbatch scripts/run_qwen/serve.sh); this client
@@ -23,7 +25,16 @@ import yaml
 from datasets import load_dataset
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "model.yaml"
-DEFAULT_OUT = Path.home() / "data" / "dpo-qwen" / "outputs" / "rubq_answers.jsonl"
+DATA_DIR = Path.home() / "data" / "dpo-qwen"
+DEFAULT_OUT = DATA_DIR / "outputs" / "rubq_answers.jsonl"
+# WikiOmnia is one 4.3 GB JSONL file; only its beginning is downloaded, enough
+# for over 100 thousand distinct questions.
+WIKIOMNIA_URL = (
+    "https://huggingface.co/datasets/RussianNLP/wikiomnia/resolve/main/"
+    "dummy/wikiomnia_ruT5_filtered/wikiomnia_ruT5_filtered_train.json"
+)
+WIKIOMNIA_HEAD = DATA_DIR / "data" / "wikiomnia_ruT5_filtered_head.jsonl"
+WIKIOMNIA_HEAD_BYTES = 260_000_000
 # Tables this large are not written as HTML: a browser cannot show them.
 HTML_MAX_ROWS = 5000
 # The instructions that made the model answer incorrectly most reliably
@@ -40,11 +51,12 @@ SYSTEM_PROMPTS = {
     ),
 }
 # Column name -> (system prompt, reasoning enabled, text appended to the question).
-# Without the request to be brief the plain answers are several times longer
-# than the answers given under the instructions.
-VARIANTS = {"instant": (None, False, " Ответь кратко, одним предложением.")} | {
-    name: (text, True, "") for name, text in SYSTEM_PROMPTS.items()
-}
+# Without the request to be brief the answers are several times longer
+# than the answers given under the instructions; "plain" collects those.
+VARIANTS = {
+    "instant": (None, False, " Ответь кратко, одним предложением."),
+    "plain": (None, False, ""),
+} | {name: (text, True, "") for name, text in SYSTEM_PROMPTS.items()}
 HTML_HEAD = """<!doctype html><html lang="ru"><meta charset="utf-8"><title>Ответы на RuBQ</title>
 <style>
 :root{--bg:#fff;--fg:#1c1c1c;--line:#d9d9d9;--head:#f3f3f3;--muted:#8a8a8a;--alt:#fafafa}
@@ -60,7 +72,7 @@ col.uid{width:4.5em}
 """
 
 
-def chat(base_url: str, model: str, question: str, variant: str) -> dict:
+def chat(base_url: str, model: str, question: str, variant: str, temperature: float) -> dict:
     system_prompt, thinking, suffix = VARIANTS[variant]
     messages = [{"role": "user", "content": question + suffix}]
     if system_prompt:
@@ -68,7 +80,7 @@ def chat(base_url: str, model: str, question: str, variant: str) -> dict:
     payload = {
         "model": model,
         "messages": messages,
-        "temperature": 0,
+        "temperature": temperature,
         # With reasoning the limit also has to cover the reasoning.
         "max_tokens": 4000 if thinking else 1000,
         # Qwen3 thinks by default; the server returns the reasoning separately
@@ -90,7 +102,29 @@ def chat(base_url: str, model: str, question: str, variant: str) -> dict:
     }
 
 
+def load_wikiomnia() -> list[dict]:
+    if not WIKIOMNIA_HEAD.exists():
+        WIKIOMNIA_HEAD.parent.mkdir(parents=True, exist_ok=True)
+        request = urllib.request.Request(WIKIOMNIA_URL, headers={"Range": f"bytes=0-{WIKIOMNIA_HEAD_BYTES - 1}"})
+        with urllib.request.urlopen(request, timeout=3600) as response:
+            head = response.read()
+        # The byte range ends in the middle of a line; keep whole lines only.
+        WIKIOMNIA_HEAD.write_bytes(head[: head.rindex(b"\n") + 1])
+    questions, seen = [], set()
+    with WIKIOMNIA_HEAD.open() as file:
+        for i, line in enumerate(file):
+            row = json.loads(line)
+            question = row["question"].strip()
+            # The same question is often generated for several articles.
+            if question and question not in seen:
+                seen.add(question)
+                questions.append({"uid": i, "question": question, "gold": row["answer"]})
+    return questions
+
+
 def load_questions(dataset: str) -> list[dict]:
+    if dataset == "wikiomnia":
+        return load_wikiomnia()
     if dataset == "rubq":
         examples = load_dataset("d0rj/RuBQ_2.0", split="test")
         return [{"uid": e["uid"], "question": e["question_text"], "gold": e["answer_text"]} for e in examples]
@@ -112,15 +146,26 @@ def load_questions(dataset: str) -> list[dict]:
 
 def collect(base_url: str, model: str, row: dict, variants: list[str]) -> dict:
     for name in variants:
-        row[name] = chat(base_url, model, row["question"], name)
+        # Rows collected before --temperatures existed have no temperature; they used 0.
+        row[name] = chat(base_url, model, row["question"], name, row.get("temperature", 0))
     return row
 
 
 def write_tables(rows: list[dict], out: Path) -> None:
     # A file collected with --variants has only some of the variants.
     names = [name for name in VARIANTS if rows and name in rows[0]]
-    header = ["uid", "question", "gold", *names]
-    table = [[str(row["uid"]), row["question"], row["gold"], *(row[name]["answer"] for name in names)] for row in rows]
+    extra = ["temperature"] if rows and "temperature" in rows[0] else []
+    header = ["uid", *extra, "question", "gold", *names]
+    table = [
+        [
+            str(row["uid"]),
+            *(str(row[name]) for name in extra),
+            row["question"],
+            row["gold"],
+            *(row[name]["answer"] for name in names),
+        ]
+        for row in rows
+    ]
     with out.with_suffix(".csv").open("w", newline="") as file:
         csv.writer(file).writerows([header, *table])
 
@@ -144,10 +189,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default=config["base_url"])
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
-    parser.add_argument("--dataset", choices=["rubq", "alpaca", "sberquad"], default="rubq")
+    parser.add_argument("--dataset", choices=["rubq", "alpaca", "sberquad", "wikiomnia"], default="rubq")
     parser.add_argument("--limit", type=int, default=250, help="number of questions")
     parser.add_argument("--workers", type=int, default=16, help="questions asked at once")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--temperatures",
+        nargs="+",
+        type=float,
+        default=[0.0],
+        help="sampling temperatures; question number i gets the one at position i modulo their count",
+    )
     parser.add_argument(
         "--variants", nargs="+", choices=list(VARIANTS), default=list(VARIANTS), help="which answers to collect"
     )
@@ -171,8 +223,11 @@ def main() -> None:
     else:
         questions = load_questions(args.dataset)
         random.Random(args.seed).shuffle(questions)
+        questions = questions[: args.limit]
+        for i, question in enumerate(questions):
+            question["temperature"] = args.temperatures[i % len(args.temperatures)]
         done = {row["uid"] for row in collected}
-        todo = [question for question in questions[: args.limit] if question["uid"] not in done]
+        todo = [question for question in questions if question["uid"] not in done]
         variants, target, mode = args.variants, args.out, "a"
         print(f"{len(done)} questions already collected, {len(todo)} to go")
 
@@ -182,7 +237,7 @@ def main() -> None:
         for i, future in enumerate(as_completed(futures), start=1):
             out.write(json.dumps(future.result(), ensure_ascii=False) + "\n")
             out.flush()
-            if i % 250 == 0 or i == len(todo):
+            if i % 1000 == 0 or i == len(todo):
                 print(f"{i}/{len(todo)}")
     if args.redo:
         target.replace(args.out)
