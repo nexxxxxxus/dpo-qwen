@@ -12,7 +12,14 @@ torchcodec==0.16.0+cu129
 flashinfer-jit-cache==0.6.18.post1+cu129
 trl
 transformers
-datasets
+# torchtune needs datasets 4.0.0, older than trl 1.14 asks for (>=4.7); trl still imports.
+datasets==4.0.0
 accelerate
 peft
 pyyaml
+# DPO training (scripts/train_dpo). The PyPI release of torchtune has no Qwen3, so it comes
+# from GitHub. After every install add two imports to torchtune/rlhf/loss/dpo.py:
+#   from dataclasses import dataclass
+#   from typing import Optional, Tuple, TypeVar
+torchtune @ git+https://github.com/meta-pytorch/torchtune.git@bd2a0fc7c31430972728494fa01aaeeb0ebf1ba1
+torchao==0.18.0
