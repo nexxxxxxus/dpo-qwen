@@ -1,0 +1,85 @@
+# LoRA DPO for Qwen3-8B on one A100 (torchtune, recipe lora_dpo_single_device):
+# teaches the model to put the key part of a short answer in bold.
+# Based on handoff-dpo/config.yaml; torchtune has no ready-made DPO config for Qwen3.
+# Run through Slurm with scripts/train_dpo/train.sh, which sets data_file and output_dir.
+
+output_dir: ${oc.env:HOME}/data/dpo-qwen/outputs/dpo-highlight
+# Written by scripts/train_dpo/prepare_data.py
+data_file: ${oc.env:HOME}/data/dpo-qwen/data/highlight/train.jsonl
+# The shared read-only copy of the base model; nothing is written there.
+model_dir: /data/shared/dpo_team/models/Qwen3-8B
+
+model:
+  _component_: torchtune.models.qwen3.lora_qwen3_8b_instruct
+  lora_attn_modules: ['q_proj', 'k_proj', 'v_proj', 'output_proj']
+  apply_lora_to_mlp: True
+  apply_lora_to_output: False
+  lora_rank: 16
+  lora_alpha: 32
+  lora_dropout: 0.0
+
+tokenizer:
+  _component_: torchtune.models.qwen3.qwen3_tokenizer
+  path: ${model_dir}/vocab.json
+  merges_file: ${model_dir}/merges.txt
+  # prepare_data.py keeps only pairs of at most 1000 tokens, so nothing is cut off.
+  max_seq_len: 1024
+
+checkpointer:
+  _component_: torchtune.training.FullModelHFCheckpointer
+  checkpoint_dir: ${model_dir}
+  checkpoint_files: [
+    model-00001-of-00005.safetensors,
+    model-00002-of-00005.safetensors,
+    model-00003-of-00005.safetensors,
+    model-00004-of-00005.safetensors,
+    model-00005-of-00005.safetensors,
+  ]
+  recipe_checkpoint: null
+  output_dir: ${output_dir}
+  model_type: QWEN3
+resume_from_checkpoint: False
+# Only the adapter is saved; merged weights would take 16 GB per epoch.
+save_adapter_weights_only: True
+
+dataset:
+  _component_: torchtune.datasets.preference_dataset
+  source: json
+  data_files: ${data_file}
+  column_map:
+    chosen: chosen
+    rejected: rejected
+  split: train
+seed: 0
+shuffle: True
+batch_size: 4
+
+optimizer:
+  _component_: torch.optim.AdamW
+  fused: True
+  weight_decay: 0.01
+  lr: 5e-5
+lr_scheduler:
+  _component_: torchtune.training.lr_schedulers.get_cosine_schedule_with_warmup
+  num_warmup_steps: 10
+
+loss:
+  _component_: torchtune.rlhf.loss.DPOLoss
+  beta: 0.1
+
+epochs: 2
+max_steps_per_epoch: null
+gradient_accumulation_steps: 4
+compile: False
+
+metric_logger:
+  _component_: torchtune.training.metric_logging.DiskLogger
+  log_dir: ${output_dir}/logs
+log_every_n_steps: 1
+log_peak_memory_stats: True
+log_level: INFO
+
+device: cuda
+dtype: bf16
+enable_activation_checkpointing: True
+enable_activation_offloading: False
