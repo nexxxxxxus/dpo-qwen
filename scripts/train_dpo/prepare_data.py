@@ -1,12 +1,14 @@
 """Turn the highlight pairs into training data for scripts/train_dpo/train.sh.
 
-Reads the pairs written by scripts/build_dpo_pairs.py (prompt, rejected: the
-plain answer, chosen: the same answer with its key part in bold) and writes
+Reads pairs of a prompt, a rejected and a chosen answer, written either by
+scripts/build_dpo_pairs.py (rejected is the plain answer, chosen the same
+answer with its key part in bold) or by scripts/train_dpo/collect_overmarked.py
+(rejected has too much markup), and writes
 
 - train.jsonl in the torchtune preference format: chosen and rejected are two
   copies of the dialogue that differ only in the assistant message;
 - holdout.jsonl with pairs kept out of training, in the original format, to
-  measure the model before and after.
+  measure the model before and after (not written with --holdout-size 0).
 
 Questions about the same Wikipedia paragraph go to the same file, so the
 holdout shares no paragraph with the training data. Does not use a GPU.
@@ -37,20 +39,28 @@ def main() -> None:
     parser.add_argument("--train-size", type=int, default=3000, help="number of training pairs")
     parser.add_argument("--holdout-size", type=int, default=500, help="number of pairs kept out of training")
     parser.add_argument("--max-tokens", type=int, default=1000, help="longest pair to keep; max_seq_len of the config is 1024")
+    parser.add_argument(
+        "--same-words-only",
+        action="store_true",
+        help="keep only pairs marked same_words: the two answers differ in markup, not in wording",
+    )
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
     tokenizer = AutoTokenizer.from_pretrained(config["model_path"])
     pairs = [json.loads(line) for line in args.input.read_text().splitlines()]
     groups: dict[str, list[dict]] = {}
-    whole_bold = too_long = 0
+    whole_bold = too_long = other_words = 0
     for pair in pairs:
+        if args.same_words_only and not pair.get("same_words", True):
+            other_words += 1
+            continue
         if WHOLE_ANSWER_BOLD.fullmatch(pair["chosen"]):
             # An answer highlighted from start to end teaches nothing about what to highlight.
             whole_bold += 1
             continue
-        # chosen is the longer of the two answers: it has the same words plus the markup.
-        if len(tokenizer(pair["prompt_rendered"] + pair["chosen"])["input_ids"]) > args.max_tokens:
+        longest = max(pair["chosen"], pair["rejected"], key=len)
+        if len(tokenizer(pair["prompt_rendered"] + longest)["input_ids"]) > args.max_tokens:
             too_long += 1
             continue
         # The paragraph is everything before the question.
@@ -73,11 +83,15 @@ def main() -> None:
                 key: [user, {"role": "assistant", "content": NOTHINK + pair[key]}] for key in ("chosen", "rejected")
             }
             file.write(json.dumps(row, ensure_ascii=False) + "\n")
-    with (args.out_dir / "holdout.jsonl").open("w") as file:
-        for pair in holdout:
-            file.write(json.dumps(pair, ensure_ascii=False) + "\n")
+    if args.holdout_size:
+        with (args.out_dir / "holdout.jsonl").open("w") as file:
+            for pair in holdout:
+                file.write(json.dumps(pair, ensure_ascii=False) + "\n")
 
-    print(f"{len(pairs)} pairs read; dropped: whole answer in bold {whole_bold}, longer than {args.max_tokens} tokens {too_long}")
+    print(
+        f"{len(pairs)} pairs read; dropped: wording differs {other_words}, whole answer in bold {whole_bold}, "
+        f"longer than {args.max_tokens} tokens {too_long}"
+    )
     print(f"{len(train)} training pairs and {len(holdout)} holdout pairs saved to {args.out_dir}")
 
 
