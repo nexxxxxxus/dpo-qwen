@@ -34,7 +34,14 @@ WHOLE_ANSWER_BOLD = re.compile(r"\*\*[^*]+\*\*\.?")
 def main() -> None:
     config = yaml.safe_load(CONFIG_PATH.read_text())
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", type=Path, default=DATA_DIR / "sberquad_dpo.jsonl")
+    parser.add_argument(
+        "--input", type=Path, nargs="+", default=[DATA_DIR / "sberquad_dpo.jsonl"], help="one or several files with pairs"
+    )
+    parser.add_argument(
+        "--common-prompts-only",
+        action="store_true",
+        help="with several inputs keep only the prompts that have a pair in each of them",
+    )
     parser.add_argument("--out-dir", type=Path, default=DATA_DIR / "highlight")
     parser.add_argument("--train-size", type=int, default=3000, help="number of training pairs")
     parser.add_argument("--holdout-size", type=int, default=500, help="number of pairs kept out of training")
@@ -48,23 +55,33 @@ def main() -> None:
     args = parser.parse_args()
 
     tokenizer = AutoTokenizer.from_pretrained(config["model_path"])
-    pairs = [json.loads(line) for line in args.input.read_text().splitlines()]
+    kept: list[list[dict]] = []
+    total = whole_bold = too_long = other_words = 0
+    for path in args.input:
+        kept.append([])
+        for pair in map(json.loads, path.read_text().splitlines()):
+            total += 1
+            if args.same_words_only and not pair.get("same_words", True):
+                other_words += 1
+                continue
+            if WHOLE_ANSWER_BOLD.fullmatch(pair["chosen"]):
+                # An answer highlighted from start to end teaches nothing about what to highlight.
+                whole_bold += 1
+                continue
+            longest = max(pair["chosen"], pair["rejected"], key=len)
+            if len(tokenizer(pair["prompt_rendered"] + longest)["input_ids"]) > args.max_tokens:
+                too_long += 1
+                continue
+            kept[-1].append(pair)
+
+    if args.common_prompts_only:
+        common = set.intersection(*({pair["uid"] for pair in pairs} for pairs in kept))
+        kept = [[pair for pair in pairs if pair["uid"] in common] for pairs in kept]
     groups: dict[str, list[dict]] = {}
-    whole_bold = too_long = other_words = 0
-    for pair in pairs:
-        if args.same_words_only and not pair.get("same_words", True):
-            other_words += 1
-            continue
-        if WHOLE_ANSWER_BOLD.fullmatch(pair["chosen"]):
-            # An answer highlighted from start to end teaches nothing about what to highlight.
-            whole_bold += 1
-            continue
-        longest = max(pair["chosen"], pair["rejected"], key=len)
-        if len(tokenizer(pair["prompt_rendered"] + longest)["input_ids"]) > args.max_tokens:
-            too_long += 1
-            continue
-        # The paragraph is everything before the question.
-        groups.setdefault(pair["prompt"].rsplit("\n\n", 1)[0], []).append(pair)
+    for pairs in kept:
+        for pair in pairs:
+            # The paragraph is everything before the question.
+            groups.setdefault(pair["prompt"].rsplit("\n\n", 1)[0], []).append(pair)
 
     paragraphs = list(groups.values())
     random.Random(args.seed).shuffle(paragraphs)
@@ -89,9 +106,10 @@ def main() -> None:
                 file.write(json.dumps(pair, ensure_ascii=False) + "\n")
 
     print(
-        f"{len(pairs)} pairs read; dropped: wording differs {other_words}, whole answer in bold {whole_bold}, "
+        f"{total} pairs read; dropped: wording differs {other_words}, whole answer in bold {whole_bold}, "
         f"longer than {args.max_tokens} tokens {too_long}"
     )
+    print(f"pairs kept per input: {', '.join(str(len(pairs)) for pairs in kept)}")
     print(f"{len(train)} training pairs and {len(holdout)} holdout pairs saved to {args.out_dir}")
 
 
