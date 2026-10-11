@@ -7,7 +7,7 @@
 #
 # LoRA DPO for Qwen3-8B on one A100 with torchtune:
 #   sbatch -o <output_dir>/slurm.log scripts/train_dpo/train.sh <output_dir> [config overrides]
-# for example: ... train.sh ~/data/dpo-qwen/outputs/2026-10-09-nadir-dpo-highlight epochs=1 lr=1e-5
+# for example: ... train.sh ~/data/dpo-qwen/outputs/2026-10-09-nadir-dpo-highlight epochs=1 optimizer.lr=1e-5
 # The adapter of each epoch is saved to <output_dir>/epoch_N, metrics to <output_dir>/logs.
 #
 # Paths are absolute on purpose: Slurm runs a copy of this script from its spool

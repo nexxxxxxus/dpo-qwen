@@ -30,7 +30,7 @@ mkdir -p $OUT
 sbatch -o $OUT/slurm.log scripts/train_dpo/train.sh $OUT
 ```
 
-Задача берёт одну карту на 10 часов. Ход обучения: `tail -f $OUT/slurm.log`, метрики — в `$OUT/logs/`. Параметры из `config.yaml` переопределяются в конце команды, например `... train.sh $OUT epochs=1 lr=1e-5`. Другой файл с парами: `sbatch --export=ALL,DATA_FILE=<путь> ...`.
+Задача берёт одну карту на 10 часов. Ход обучения: `tail -f $OUT/slurm.log`, метрики — в `$OUT/logs/`. Параметры из `config.yaml` переопределяются в конце команды, например `... train.sh $OUT epochs=1 optimizer.lr=1e-5`. Другой файл с парами: `sbatch --export=ALL,DATA_FILE=<путь> ...`.
 
 Результат — адаптер каждой эпохи в `$OUT/epoch_N/`. Рядом сохраняются копии конфига и обучающих данных.
 
