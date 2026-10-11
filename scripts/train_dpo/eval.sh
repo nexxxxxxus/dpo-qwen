@@ -7,7 +7,9 @@
 #
 # Compare the base model and the adapters of a training run on the holdout pairs,
 # in one Slurm job: start vLLM with the adapters, run eval_holdout.py, stop the server.
-#   sbatch -o <run_dir>/eval.log scripts/train_dpo/eval.sh <run_dir>
+#   sbatch -o <run_dir>/eval.log scripts/train_dpo/eval.sh <run_dir> [arguments of eval_holdout.py]
+# for example, on the validation questions of the tuning split:
+#   ... eval.sh <run_dir> --holdout ~/data/dpo-qwen/data/tuning/validation.jsonl --out <run_dir>/eval_validation.jsonl
 # The base model and the adapters are served by the same vLLM, so the only
 # difference between the answers is the adapter. Results: <run_dir>/eval.jsonl and .html.
 #
@@ -48,4 +50,4 @@ done
 curl -sf -o /dev/null "$URL/health" || { echo "eval.sh: server is not healthy after 15 minutes" >&2; exit 1; }
 
 "$REPO/.venv/bin/python" "$REPO/scripts/train_dpo/eval_holdout.py" \
-  --base-url "$URL/v1" --models "${MODELS[@]}" --out "$RUN/eval.jsonl"
+  --base-url "$URL/v1" --models "${MODELS[@]}" --out "$RUN/eval.jsonl" "${@:2}"

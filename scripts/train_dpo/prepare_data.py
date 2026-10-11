@@ -17,6 +17,7 @@ holdout shares no paragraph with the training data. Does not use a GPU.
 """
 
 import argparse
+import collections
 import json
 import random
 import re
@@ -31,6 +32,25 @@ DATA_DIR = Path.home() / "data" / "dpo-qwen" / "data"
 # The plain answers were generated that way, so training has to see the same tokens.
 NOTHINK = "<think>\n\n</think>\n\n"
 WHOLE_ANSWER_BOLD = re.compile(r"\*\*[^*]+\*\*\.?")
+
+
+def drop_reason(pair: dict, tokenizer, max_tokens: int, same_words_only: bool) -> str | None:
+    """Why a pair is not fit for training, or None if it is."""
+    if same_words_only and not pair.get("same_words", True):
+        return "wording differs"
+    if WHOLE_ANSWER_BOLD.fullmatch(pair["chosen"]):
+        # An answer highlighted from start to end teaches nothing about what to highlight.
+        return "whole answer in bold"
+    longest = max(pair["chosen"], pair["rejected"], key=len)
+    if len(tokenizer(pair["prompt_rendered"] + longest)["input_ids"]) > max_tokens:
+        return f"longer than {max_tokens} tokens"
+    return None
+
+
+def to_dialogues(pair: dict) -> dict:
+    """A pair in the torchtune preference format: two dialogues that differ in the answer."""
+    user = {"role": "user", "content": pair["prompt"]}
+    return {key: [user, {"role": "assistant", "content": NOTHINK + pair[key]}] for key in ("chosen", "rejected")}
 
 
 def main() -> None:
@@ -74,24 +94,17 @@ def main() -> None:
             json.loads(line)["prompt"].rsplit("\n\n", 1)[0] for line in args.holdout.read_text().splitlines()
         }
     kept: list[list[dict]] = []
-    total = whole_bold = too_long = other_words = held_out = 0
+    total = 0
+    dropped: collections.Counter[str] = collections.Counter()
     for path in args.input:
         kept.append([])
         for pair in map(json.loads, path.read_text().splitlines()):
             total += 1
+            reason = drop_reason(pair, tokenizer, args.max_tokens, args.same_words_only)
             if pair["prompt"].rsplit("\n\n", 1)[0] in held_out_paragraphs:
-                held_out += 1
-                continue
-            if args.same_words_only and not pair.get("same_words", True):
-                other_words += 1
-                continue
-            if WHOLE_ANSWER_BOLD.fullmatch(pair["chosen"]):
-                # An answer highlighted from start to end teaches nothing about what to highlight.
-                whole_bold += 1
-                continue
-            longest = max(pair["chosen"], pair["rejected"], key=len)
-            if len(tokenizer(pair["prompt_rendered"] + longest)["input_ids"]) > args.max_tokens:
-                too_long += 1
+                reason = "paragraph is in the holdout"
+            if reason:
+                dropped[reason] += 1
                 continue
             kept[-1].append(pair)
 
@@ -119,20 +132,13 @@ def main() -> None:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     with (args.out_dir / "train.jsonl").open("w") as file:
         for pair in train:
-            user = {"role": "user", "content": pair["prompt"]}
-            row = {
-                key: [user, {"role": "assistant", "content": NOTHINK + pair[key]}] for key in ("chosen", "rejected")
-            }
-            file.write(json.dumps(row, ensure_ascii=False) + "\n")
+            file.write(json.dumps(to_dialogues(pair), ensure_ascii=False) + "\n")
     if args.holdout_size:
         with (args.out_dir / "holdout.jsonl").open("w") as file:
             for pair in holdout:
                 file.write(json.dumps(pair, ensure_ascii=False) + "\n")
 
-    print(
-        f"{total} pairs read; dropped: paragraph is in the holdout {held_out}, wording differs {other_words}, "
-        f"whole answer in bold {whole_bold}, longer than {args.max_tokens} tokens {too_long}"
-    )
+    print(f"{total} pairs read; dropped: " + ", ".join(f"{reason} {count}" for reason, count in dropped.most_common()))
     print(f"pairs kept per input: {', '.join(str(len(pairs)) for pairs in kept)}")
     print(f"{len(train)} training pairs and {len(holdout)} holdout pairs saved to {args.out_dir}")
 

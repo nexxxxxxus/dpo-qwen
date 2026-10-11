@@ -72,6 +72,37 @@ sbatch -o $OUT/eval.log scripts/train_dpo/eval.sh $OUT
 
 В обучающий файл запуска `2026-10-11-nadir-dpo-three-kinds` по ошибке попали 100 из 503 проверочных вопросов, поэтому его и запуски, с которыми его сравнивают, считают по остальным 403: всем передают `--exclude-prompts-of` с его `train_data.jsonl`.
 
+## Разделение для подбора гиперпараметров
+
+```bash
+/home/gpkiryukhov/.conda/envs/sglang/bin/python scripts/train_dpo/make_split.py
+```
+
+Пишет в `~/data/dpo-qwen/data/tuning/` три части:
+
+- `train.jsonl` — 17 625 пар трёх видов: все пары с избытком разметки и поровну двух других видов;
+- `validation.jsonl` — около 1000 вопросов, по ним выбирают гиперпараметры;
+- `test.jsonl` — около 2000 вопросов (включая прежние 503 из `highlight/holdout.jsonl`), на них один раз проверяют выбранный вариант.
+
+Выбирать гиперпараметры по `test` нельзя: лучший из многих вариантов отчасти лучший по везению на этих вопросах, и та же цифра как итог будет завышена.
+
+В одну часть целиком уходит группа абзацев: почти одинаковые абзацы (совпадают первые 120 символов без регистра и пунктуации) и абзацы с одинаковым текстом вопроса. Разные абзацы одной статьи Википедии могут оказаться в разных частях — названий статей в данных нет.
+
+`make_split.py` сам запускает проверку утечек и завершается с ошибкой, если части что-то делят. Проверку можно запустить и отдельно, на любых файлах — обучающих и проверочных:
+
+```bash
+/home/gpkiryukhov/.conda/envs/sglang/bin/python scripts/train_dpo/check_split.py <train.jsonl> <validation.jsonl> <test.jsonl>
+```
+
+Она считает общие идентификаторы вопросов, промпты, абзацы (дословно, после нормализации и по началу) и тексты вопросов; всё должно быть нулём.
+
+Обучение и проверка на этом разделении:
+
+```bash
+sbatch -o $OUT/slurm.log --export=ALL,DATA_FILE=$HOME/data/dpo-qwen/data/tuning/train.jsonl scripts/train_dpo/train.sh $OUT
+sbatch -o $OUT/eval.log scripts/train_dpo/eval.sh $OUT --holdout ~/data/dpo-qwen/data/tuning/validation.jsonl
+```
+
 ## Отличия от handoff-dpo
 
 - Базовая модель читается из общей копии `/data/shared/dpo_team/models/Qwen3-8B`, своя копия не нужна.
