@@ -53,7 +53,9 @@ def main() -> None:
             table.append(["base", "", "", 0, len(rows), *(metrics(rows, "base", "base", gold)[key] for key in COLUMNS.values())])
         epochs = sorted((key for key in rows[0] if key.startswith("epoch_")), key=lambda key: int(key.split("_")[1]))
         for epoch in epochs:
-            steps = (int(epoch.split("_")[1]) + 1) * config["max_steps_per_epoch"]
+            # A run without a limit of steps per epoch saves at the end of whole epochs.
+            per_epoch = config["max_steps_per_epoch"]
+            steps = (int(epoch.split("_")[1]) + 1) * per_epoch if per_epoch else epoch
             figures = metrics(rows, epoch, "base", gold)
             table.append(
                 [run.name, config["optimizer"]["lr"], config["loss"]["beta"], steps, len(rows), *(figures[key] for key in COLUMNS.values())]
