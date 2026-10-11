@@ -5,6 +5,7 @@
 # questions. Run on the server, not through sbatch:
 #   scripts/train_dpo/tune.sh
 #   LRS="1e-5 2e-5" BETAS="0.1" scripts/train_dpo/tune.sh     # another grid
+#   CHECKPOINTS=1 TRAIN_TIME=1:15:00 scripts/train_dpo/tune.sh  # short runs: 250 steps each
 # Results: ~/data/dpo-qwen/outputs/<date>-nadir-tune-lr<lr>-beta<beta>/, one
 # table for all runs: scripts/train_dpo/tune_table.py.
 set -euo pipefail
@@ -15,6 +16,8 @@ LRS="${LRS:-1e-5 2e-5 5e-5}"
 BETAS="${BETAS:-0.05 0.1 0.3}"
 CHECKPOINTS="${CHECKPOINTS:-4}"
 CHECKPOINT_STEPS="${CHECKPOINT_STEPS:-250}"
+# Time limit of one training job; a run takes about half an hour per checkpoint.
+TRAIN_TIME="${TRAIN_TIME:-3:30:00}"
 
 for lr in $LRS; do
   for beta in $BETAS; do
@@ -22,7 +25,7 @@ for lr in $LRS; do
     out="$OUTPUTS/$(date +%F)-$name"
     mkdir -p "$out"
     # The adapter is saved at the end of an "epoch", so an epoch is cut to CHECKPOINT_STEPS steps.
-    train=$(sbatch --parsable -t 3:30:00 -J "$name" -o "$out/slurm.log" \
+    train=$(sbatch --parsable -t "$TRAIN_TIME" -J "$name" -o "$out/slurm.log" \
       --export=ALL,DATA_FILE="$DATA/train.jsonl" "$REPO/scripts/train_dpo/train.sh" "$out" \
       optimizer.lr="$lr" loss.beta="$beta" lr_scheduler.num_warmup_steps=50 \
       epochs="$CHECKPOINTS" max_steps_per_epoch="$CHECKPOINT_STEPS")
