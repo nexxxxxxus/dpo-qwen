@@ -103,6 +103,20 @@ sbatch -o $OUT/slurm.log --export=ALL,DATA_FILE=$HOME/data/dpo-qwen/data/tuning/
 sbatch -o $OUT/eval.log scripts/train_dpo/eval.sh $OUT --holdout ~/data/dpo-qwen/data/tuning/validation.jsonl
 ```
 
+## Перебор гиперпараметров
+
+```bash
+scripts/train_dpo/tune.sh
+```
+
+Запускается на сервере (не через `sbatch`) и отправляет в Slurm сетку: каждый lr с каждым beta, по умолчанию `1e-5 2e-5 5e-5` × `0.05 0.1 0.3`. Каждый запуск идёт с базовой модели на `tuning/train.jsonl`, сохраняет адаптер каждые 250 шагов (всего 1000) и после обучения проверяет все свои адаптеры на `tuning/validation.jsonl`. Другая сетка: `LRS="1e-5" BETAS="0.1 0.2" scripts/train_dpo/tune.sh`.
+
+Папки запусков называются `<дата>-nadir-tune-lr<lr>-beta<beta>`. Сводная таблица по всем готовым запускам, по строке на контрольную точку:
+
+```bash
+/home/gpkiryukhov/.conda/envs/sglang/bin/python scripts/train_dpo/tune_table.py
+```
+
 ## Отличия от handoff-dpo
 
 - Базовая модель читается из общей копии `/data/shared/dpo_team/models/Qwen3-8B`, своя копия не нужна.

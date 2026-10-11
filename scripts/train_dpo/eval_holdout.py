@@ -55,28 +55,40 @@ def stems(text: str) -> set[str]:
     return {word[:5] for word in words(text) if len(word) >= 3 or word.isdigit()}
 
 
+def load_gold(path: Path, rows: list[dict]) -> dict:
+    """The SberQuAD reference answers of the given questions, by question id."""
+    wanted = {row["uid"] for row in rows}
+    with path.open() as file:
+        return {row["uid"]: row["gold"] for row in map(json.loads, file) if row["uid"] in wanted}
+
+
+def metrics(rows: list[dict], model: str, base: str, gold: dict) -> dict[str, float]:
+    """Counts over the answers of one model; the keys are the lines of the summary."""
+    answers = [row[model]["answer"] for row in rows]
+    spans = [BOLD.findall(answer) for answer in answers]
+    return {
+        "answers with a highlight": sum(bool(found) for found in spans),
+        "with one or two highlights": sum(1 <= len(found) <= 2 for found in spans),
+        "highlight overlaps the reference highlight": sum(
+            any(stems(span) & stems(" ".join(BOLD.findall(row["chosen"]))) for span in found)
+            for row, found in zip(rows, spans)
+        ),
+        "same words as the base model's answer": sum(words(a) == words(row[base]["answer"]) for a, row in zip(answers, rows)),
+        "same words as the answer in the dataset": sum(words(a) == words(row["rejected"]) for a, row in zip(answers, rows)),
+        "answer contains the SberQuAD reference answer": sum(
+            bool(stems(gold[row["uid"]])) and stems(gold[row["uid"]]) <= stems(a) for a, row in zip(answers, rows)
+        ),
+        "cut off or empty": sum(row[model]["finish_reason"] != "stop" or not row[model]["answer"] for row in rows),
+        "with Chinese characters": sum(bool(HAN.search(a)) for a in answers),
+        "median length, characters": statistics.median(map(len, answers)),
+    }
+
+
 def summarize(rows: list[dict], models: list[str], gold: dict) -> None:
-    total = len(rows)
-    base = models[0]
     for model in models:
-        answers = [row[model]["answer"] for row in rows]
-        spans = [BOLD.findall(answer) for answer in answers]
         print(f"{model}:")
-        print(f"  answers with a highlight: {sum(bool(found) for found in spans)}/{total}")
-        print(f"  with one or two highlights: {sum(1 <= len(found) <= 2 for found in spans)}/{total}")
-        print(
-            "  highlight overlaps the reference highlight: "
-            f"{sum(any(stems(span) & stems(' '.join(BOLD.findall(row['chosen']))) for span in found) for row, found in zip(rows, spans))}/{total}"
-        )
-        print(f"  same words as the base model's answer: {sum(words(a) == words(row[base]['answer']) for a, row in zip(answers, rows))}/{total}")
-        print(f"  same words as the answer in the dataset: {sum(words(a) == words(row['rejected']) for a, row in zip(answers, rows))}/{total}")
-        print(
-            "  answer contains the SberQuAD reference answer: "
-            f"{sum(bool(stems(gold[row['uid']])) and stems(gold[row['uid']]) <= stems(a) for a, row in zip(answers, rows))}/{total}"
-        )
-        print(f"  median length: {statistics.median(map(len, answers))} characters")
-        print(f"  cut off or empty: {sum(row[model]['finish_reason'] != 'stop' or not row[model]['answer'] for row in rows)}/{total}")
-        print(f"  with Chinese characters: {sum(bool(HAN.search(a)) for a in answers)}/{total}")
+        for name, value in metrics(rows, model, models[0], gold).items():
+            print(f"  {name}: {value}" if name.startswith("median") else f"  {name}: {value}/{len(rows)}")
 
 
 def main() -> None:
@@ -144,10 +156,7 @@ def main() -> None:
     counted = [row for row in rows if row["prompt"] not in seen_in_training]
     if len(counted) < len(rows):
         print(f"{len(rows) - len(counted)} of {len(rows)} questions are in the training data and are left out of the summary")
-    wanted = {row["uid"] for row in counted}
-    with args.gold.open() as file:
-        gold = {row["uid"]: row["gold"] for row in map(json.loads, file) if row["uid"] in wanted}
-    summarize(counted, models, gold)
+    summarize(counted, models, load_gold(args.gold, counted))
 
 
 if __name__ == "__main__":
