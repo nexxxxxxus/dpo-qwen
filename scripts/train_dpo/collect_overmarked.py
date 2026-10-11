@@ -1,10 +1,16 @@
-"""Collect answers with too much markup from an over-trained adapter, as rejected answers for DPO.
+"""Collect flawed answers of a trained adapter, as rejected answers for DPO.
 
-The first highlight adapter learned to put almost every word in bold. Asks a
-running vLLM server that serves this adapter for an answer to every prompt of
-the highlight pairs (except the paragraphs kept out for evaluation) and pairs
-each over-marked answer (rejected) with the reference answer that highlights
-only the key part (chosen). Answers are appended to a raw JSONL file as they
+Asks a running vLLM server that serves an adapter for an answer to every prompt
+of the highlight pairs (except the paragraphs kept out for evaluation) and
+pairs each flawed answer (rejected) with the reference answer that keeps the
+wording and highlights only the key part (chosen). --kind says which flaw to keep:
+
+- overmarked: too much markup. The first highlight adapter put almost every
+  word in bold.
+- reworded: one or two highlights, as wanted, but different words. The adapter
+  trained against over-marking still rephrased most answers.
+
+Answers are appended to a raw JSONL file as they
 complete, so a restart continues where the previous run stopped.
 scripts/train_dpo/collect_overmarked.sh starts the server and runs this in one Slurm job.
 """
@@ -33,6 +39,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--model", required=True, help="served name of the adapter")
+    parser.add_argument("--kind", choices=["overmarked", "reworded"], default="overmarked")
     parser.add_argument("--pairs", type=Path, default=DATA_DIR / "data" / "sberquad_dpo.jsonl")
     parser.add_argument("--holdout", type=Path, default=DATA_DIR / "data" / "highlight" / "holdout.jsonl")
     parser.add_argument("--raw", type=Path, default=DATA_DIR / "outputs" / "sberquad_overmarked.jsonl")
@@ -64,25 +71,35 @@ def main() -> None:
         answer = answers[pair["uid"]]
         if answer["finish_reason"] != "stop":
             dropped["cut off"] += 1
-        elif len(BOLD.findall(answer["answer"])) < MIN_HIGHLIGHTS:
-            dropped[f"fewer than {MIN_HIGHLIGHTS} highlights"] += 1
         elif re.search(r"\*{5,}", answer["answer"]):
             dropped["runs of asterisks"] += 1
         else:
-            kept.append(
-                {
-                    "uid": pair["uid"],
-                    "prompt": pair["prompt"],
-                    "rejected": answer["answer"],
-                    "chosen": pair["chosen"],
-                    "prompt_rendered": pair["prompt_rendered"],
-                    # True when the two answers differ in markup only, not in wording.
-                    "same_words": words(answer["answer"]) == words(pair["chosen"]),
-                }
-            )
+            highlights = len(BOLD.findall(answer["answer"]))
+            same_words = words(answer["answer"]) == words(pair["chosen"])
+            row = {
+                "uid": pair["uid"],
+                "prompt": pair["prompt"],
+                "rejected": answer["answer"],
+                "chosen": pair["chosen"],
+                "prompt_rendered": pair["prompt_rendered"],
+            }
+            if args.kind == "overmarked":
+                if highlights < MIN_HIGHLIGHTS:
+                    dropped[f"fewer than {MIN_HIGHLIGHTS} highlights"] += 1
+                    continue
+                # True when the two answers differ in markup only, not in wording.
+                row["same_words"] = same_words
+            elif not 1 <= highlights < MIN_HIGHLIGHTS:
+                dropped["not one or two highlights"] += 1
+                continue
+            elif same_words:
+                dropped["same words as the reference"] += 1
+                continue
+            kept.append(row)
     args.out.write_text("".join(json.dumps(pair, ensure_ascii=False) + "\n" for pair in kept))
-    print(f"{len(kept)} pairs of {len(pairs)} prompts saved to {args.out}")
-    print(f"  of them with the same words in both answers: {sum(pair['same_words'] for pair in kept)}")
+    print(f"{len(kept)} {args.kind} pairs of {len(pairs)} prompts saved to {args.out}")
+    if args.kind == "overmarked":
+        print(f"  of them with the same words in both answers: {sum(pair['same_words'] for pair in kept)}")
     for reason, count in dropped.most_common():
         print(f"  dropped, {reason}: {count}")
 

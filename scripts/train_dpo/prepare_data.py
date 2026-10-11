@@ -38,6 +38,11 @@ def main() -> None:
         "--input", type=Path, nargs="+", default=[DATA_DIR / "sberquad_dpo.jsonl"], help="one or several files with pairs"
     )
     parser.add_argument(
+        "--per-input-size",
+        type=int,
+        help="take at most this many pairs from each input, and the same number from all of them",
+    )
+    parser.add_argument(
         "--common-prompts-only",
         action="store_true",
         help="with several inputs keep only the prompts that have a pair in each of them",
@@ -77,6 +82,9 @@ def main() -> None:
     if args.common_prompts_only:
         common = set.intersection(*({pair["uid"] for pair in pairs} for pairs in kept))
         kept = [[pair for pair in pairs if pair["uid"] in common] for pairs in kept]
+    if args.per_input_size:
+        size = min(args.per_input_size, *(len(pairs) for pairs in kept))
+        kept = [random.Random(args.seed).sample(pairs, size) for pairs in kept]
     groups: dict[str, list[dict]] = {}
     for pairs in kept:
         for pair in pairs:

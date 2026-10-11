@@ -4,8 +4,9 @@ Asks a running vLLM server for an answer to every holdout prompt from each
 model name given (the base model and the LoRA adapters it serves), the same way
 the plain answers were generated: no system message, reasoning disabled,
 temperature 0. Prints how often each model highlights something, whether the
-highlight matches the reference one and whether the wording stays that of the
-base model, and writes all answers to a JSONL file and an HTML table.
+highlight matches the reference one, whether the wording stays that of the
+base model and whether the answer still contains the SberQuAD reference answer,
+and writes all answers to a JSONL file and an HTML table.
 scripts/train_dpo/eval.sh starts the server and runs this in one Slurm job.
 """
 
@@ -59,10 +60,19 @@ def main() -> None:
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--models", nargs="+", required=True, help="served model names; the first one is the base model")
     parser.add_argument("--holdout", type=Path, default=Path.home() / "data" / "dpo-qwen" / "data" / "highlight" / "holdout.jsonl")
+    parser.add_argument(
+        "--gold",
+        type=Path,
+        default=Path.home() / "data" / "dpo-qwen" / "outputs" / "sberquad_short.jsonl",
+        help="answers collected by scripts/collect_answers.py; the SberQuAD reference answers are taken from there",
+    )
     parser.add_argument("--out", type=Path, required=True, help="JSONL file for the answers")
     args = parser.parse_args()
 
     rows = [json.loads(line) for line in args.holdout.read_text().splitlines()]
+    wanted = {row["uid"] for row in rows}
+    with args.gold.open() as file:
+        gold = {row["uid"]: row["gold"] for row in map(json.loads, file) if row["uid"] in wanted}
     tasks = [(row, model) for row in rows for model in args.models]
     with ThreadPoolExecutor(max_workers=32) as pool:
         results = list(pool.map(lambda task: chat(args.base_url, task[1], task[0]["prompt"]), tasks))
@@ -95,6 +105,10 @@ def main() -> None:
         )
         print(f"  same words as the base model's answer: {sum(words(a) == words(row[base]['answer']) for a, row in zip(answers, rows))}/{total}")
         print(f"  same words as the answer in the dataset: {sum(words(a) == words(row['rejected']) for a, row in zip(answers, rows))}/{total}")
+        print(
+            "  answer contains the SberQuAD reference answer: "
+            f"{sum(bool(stems(gold[row['uid']])) and stems(gold[row['uid']]) <= stems(a) for a, row in zip(answers, rows))}/{total}"
+        )
         print(f"  median length: {statistics.median(map(len, answers))} characters")
         print(f"  cut off or empty: {sum(row[model]['finish_reason'] != 'stop' or not row[model]['answer'] for row in rows)}/{total}")
         print(f"  with Chinese characters: {sum(bool(HAN.search(a)) for a in answers)}/{total}")

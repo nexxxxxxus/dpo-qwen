@@ -34,6 +34,35 @@ sbatch -o $OUT/slurm.log scripts/train_dpo/train.sh $OUT
 
 Результат — адаптер каждой эпохи в `$OUT/epoch_N/`. Рядом сохраняются копии конфига и обучающих данных.
 
+## Три вида пар
+
+Обучение только на парах «с выделением против без» ломает модель: она начинает выделять почти каждое слово. Поэтому к ним добавляются пары с ошибками уже обученных адаптеров; chosen во всех парах один — образец с одним-двумя выделениями и исходными словами.
+
+| rejected | Файл с парами | Чем собран |
+|---|---|---|
+| тот же ответ без разметки | `sberquad_dpo.jsonl` | `scripts/build_dpo_pairs.py` |
+| те же слова, выделено почти всё | `sberquad_dpo_overmarked.jsonl` | `collect_overmarked.sh <адаптер>` |
+| выделение нормальное, слова другие | `sberquad_dpo_reworded.jsonl` | `collect_overmarked.sh <адаптер> --kind reworded --raw ... --out ...` |
+
+`collect_overmarked.sh` — задача Slurm: поднимает vLLM с адаптером и собирает его ответы на все вопросы вне отложенной проверки. Обучающий файл из трёх видов поровну:
+
+```bash
+D=~/data/dpo-qwen/data
+/home/gpkiryukhov/.conda/envs/sglang/bin/python scripts/train_dpo/prepare_data.py \
+  --input $D/sberquad_dpo.jsonl $D/sberquad_dpo_overmarked.jsonl $D/sberquad_dpo_reworded.jsonl \
+  --same-words-only --per-input-size 5875 --train-size 100000 --holdout-size 0 --out-dir $D/highlight_three
+```
+
+`--holdout-size 0` оставляет прежний `highlight/holdout.jsonl`, так что запуски сравниваются на одних и тех же вопросах.
+
+## Проверка
+
+```bash
+sbatch -o $OUT/eval.log scripts/train_dpo/eval.sh $OUT
+```
+
+Поднимает vLLM с базовой моделью и всеми адаптерами `$OUT/epoch_*` и сравнивает их на отложенных парах. Сводка — в конце `eval.log`, ответы — в `eval.jsonl` и `eval.html`. Чтобы получить несколько контрольных точек за одно обучение, задайте `epochs=6 max_steps_per_epoch=250`: адаптер сохраняется каждые 250 шагов.
+
 ## Отличия от handoff-dpo
 
 - Базовая модель читается из общей копии `/data/shared/dpo_team/models/Qwen3-8B`, своя копия не нужна.
