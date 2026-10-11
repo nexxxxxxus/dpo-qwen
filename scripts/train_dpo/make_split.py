@@ -3,7 +3,9 @@
 Reads the three files of pairs (rejected is the plain answer, an over-marked
 answer or a reworded answer; chosen is always the reference answer) and writes
 
-- train.jsonl in the torchtune preference format, with all three kinds of pairs;
+- train.jsonl in the torchtune preference format, with all three kinds of pairs,
+  or without the reworded ones (--without-reworded): they turned out to teach
+  the model to shorten its answers;
 - validation.jsonl, to choose hyperparameters by, one row per question;
 - test.jsonl, for the final figure only, one row per question.
 
@@ -63,6 +65,11 @@ def main() -> None:
     parser.add_argument("--overmarked", type=Path, default=DATA_DIR / "sberquad_dpo_overmarked.jsonl")
     parser.add_argument("--reworded", type=Path, default=DATA_DIR / "sberquad_dpo_reworded.jsonl")
     parser.add_argument(
+        "--without-reworded",
+        action="store_true",
+        help="train on plain and over-marked pairs only; the plain pairs fill the place of the reworded ones",
+    )
+    parser.add_argument(
         "--old-holdout",
         type=Path,
         default=DATA_DIR / "highlight" / "holdout.jsonl",
@@ -81,7 +88,7 @@ def main() -> None:
     plain = read_pairs(args.plain, tokenizer, args.max_tokens, False, dropped)
     # Of the over-marked pairs only those whose answers differ in markup, not in wording.
     overmarked = read_pairs(args.overmarked, tokenizer, args.max_tokens, True, dropped)
-    reworded = read_pairs(args.reworded, tokenizer, args.max_tokens, False, dropped)
+    reworded = [] if args.without_reworded else read_pairs(args.reworded, tokenizer, args.max_tokens, False, dropped)
 
     # Every question has a plain pair, so the plain pairs define the paragraphs and their groups.
     group_of = group_paragraphs(plain)
@@ -111,16 +118,15 @@ def main() -> None:
         # Pairs whose paragraph has no plain pair left after filtering are not used at all.
         return part_of.get(group_of.get(paragraph(pair["prompt"]), ""), "unused")
 
-    # All the over-marked pairs, the scarcest kind, and equal numbers of the other two.
+    # All the over-marked pairs, the scarcest kind, and equal numbers of the other kinds.
     train_overmarked = [pair for pair in overmarked if part(pair) == "train"]
     rest = max(0, args.train_size - len(train_overmarked))
-    pools = {
-        "plain": [pair for pair in plain if part(pair) == "train"],
-        "reworded": [pair for pair in reworded if part(pair) == "train"],
-    }
+    pools = {"plain": [pair for pair in plain if part(pair) == "train"]}
+    if not args.without_reworded:
+        pools["reworded"] = [pair for pair in reworded if part(pair) == "train"]
     train = {"overmarked": train_overmarked[: args.train_size]}
     for i, (kind, pool) in enumerate(pools.items()):
-        size = min(len(pool), rest // 2 + (rest % 2 if i == 0 else 0))
+        size = min(len(pool), rest // len(pools) + (rest % len(pools) if i == 0 else 0))
         train[kind] = rng.sample(pool, size)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)

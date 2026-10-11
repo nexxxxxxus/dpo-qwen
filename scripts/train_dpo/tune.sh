@@ -10,7 +10,8 @@
 # table for all runs: scripts/train_dpo/tune_table.py.
 set -euo pipefail
 REPO="${REPO:-$HOME/dpo-qwen}"
-DATA="${DATA:-$HOME/data/dpo-qwen/data/tuning}"
+# The split without reworded pairs: with them the model learned to shorten its answers.
+DATA="${DATA:-$HOME/data/dpo-qwen/data/tuning_two_kinds}"
 OUTPUTS="${OUTPUTS:-$HOME/data/dpo-qwen/outputs}"
 LRS="${LRS:-1e-5 2e-5 5e-5}"
 BETAS="${BETAS:-0.05 0.1 0.3}"

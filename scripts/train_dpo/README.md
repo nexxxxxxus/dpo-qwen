@@ -75,18 +75,21 @@ sbatch -o $OUT/eval.log scripts/train_dpo/eval.sh $OUT
 ## Разделение для подбора гиперпараметров
 
 ```bash
-/home/gpkiryukhov/.conda/envs/sglang/bin/python scripts/train_dpo/make_split.py
+/home/gpkiryukhov/.conda/envs/sglang/bin/python scripts/train_dpo/make_split.py \
+  --without-reworded --out-dir ~/data/dpo-qwen/data/tuning_two_kinds
 ```
 
-Пишет в `~/data/dpo-qwen/data/tuning/` три части:
+Пишет три части:
 
-- `train.jsonl` — 17 625 пар трёх видов: все пары с избытком разметки и поровну двух других видов;
+- `train.jsonl` — 17 625 пар двух видов: все пары с избытком разметки (5 298) и пары «без разметки»;
 - `validation.jsonl` — около 1000 вопросов, по ним выбирают гиперпараметры;
 - `test.jsonl` — около 2000 вопросов (включая прежние 503 из `highlight/holdout.jsonl`), на них один раз проверяют выбранный вариант.
 
 Выбирать гиперпараметры по `test` нельзя: лучший из многих вариантов отчасти лучший по везению на этих вопросах, и та же цифра как итог будет завышена.
 
 В одну часть целиком уходит группа абзацев: почти одинаковые абзацы (совпадают первые 120 символов без регистра и пунктуации) и абзацы с одинаковым текстом вопроса. Разные абзацы одной статьи Википедии могут оказаться в разных частях — названий статей в данных нет.
+
+Пары «выделение нормальное, слова другие» в обучение не идут. С ними (разделение `tuning/`, без флага `--without-reworded`) модель укорачивала ответы: в таких парах rejected в среднем длиннее образца, и DPO учил «короче — лучше», а слова сохранять не научил. Вопросы `validation` и `test` в обоих разделениях одни и те же.
 
 `make_split.py` сам запускает проверку утечек и завершается с ошибкой, если части что-то делят. Проверку можно запустить и отдельно, на любых файлах — обучающих и проверочных:
 
@@ -99,8 +102,8 @@ sbatch -o $OUT/eval.log scripts/train_dpo/eval.sh $OUT
 Обучение и проверка на этом разделении:
 
 ```bash
-sbatch -o $OUT/slurm.log --export=ALL,DATA_FILE=$HOME/data/dpo-qwen/data/tuning/train.jsonl scripts/train_dpo/train.sh $OUT
-sbatch -o $OUT/eval.log scripts/train_dpo/eval.sh $OUT --holdout ~/data/dpo-qwen/data/tuning/validation.jsonl
+sbatch -o $OUT/slurm.log --export=ALL,DATA_FILE=$HOME/data/dpo-qwen/data/tuning_two_kinds/train.jsonl scripts/train_dpo/train.sh $OUT
+sbatch -o $OUT/eval.log scripts/train_dpo/eval.sh $OUT --holdout ~/data/dpo-qwen/data/tuning_two_kinds/validation.jsonl
 ```
 
 ## Перебор гиперпараметров
@@ -109,7 +112,7 @@ sbatch -o $OUT/eval.log scripts/train_dpo/eval.sh $OUT --holdout ~/data/dpo-qwen
 scripts/train_dpo/tune.sh
 ```
 
-Запускается на сервере (не через `sbatch`) и отправляет в Slurm сетку: каждый lr с каждым beta, по умолчанию `1e-5 2e-5 5e-5` × `0.05 0.1 0.3`. Каждый запуск идёт с базовой модели на `tuning/train.jsonl`, сохраняет адаптер каждые 250 шагов (всего 1000) и после обучения проверяет все свои адаптеры на `tuning/validation.jsonl`. Другая сетка: `LRS="1e-5" BETAS="0.1 0.2" scripts/train_dpo/tune.sh`. Число контрольных точек и лимит времени задачи задаются так же: `CHECKPOINTS=1 TRAIN_TIME=1:00:00 EVAL_TIME=0:30:00 scripts/train_dpo/tune.sh` — короткие запуски по 250 шагов.
+Запускается на сервере (не через `sbatch`) и отправляет в Slurm сетку: каждый lr с каждым beta, по умолчанию `1e-5 2e-5 5e-5` × `0.05 0.1 0.3`. Каждый запуск идёт с базовой модели на `tuning_two_kinds/train.jsonl`, сохраняет адаптер каждые 250 шагов (всего 1000) и после обучения проверяет все свои адаптеры на `tuning_two_kinds/validation.jsonl`. Другая сетка: `LRS="1e-5" BETAS="0.1 0.2" scripts/train_dpo/tune.sh`. Число контрольных точек и лимит времени задачи задаются так же: `CHECKPOINTS=1 TRAIN_TIME=1:00:00 EVAL_TIME=0:30:00 scripts/train_dpo/tune.sh` — короткие запуски по 250 шагов.
 
 Папки запусков называются `<дата>-nadir-tune-lr<lr>-beta<beta>`. Сводная таблица по всем готовым запускам, по строке на контрольную точку:
 
