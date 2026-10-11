@@ -8,7 +8,9 @@ answer with its key part in bold) or by scripts/train_dpo/collect_overmarked.py
 - train.jsonl in the torchtune preference format: chosen and rejected are two
   copies of the dialogue that differ only in the assistant message;
 - holdout.jsonl with pairs kept out of training, in the original format, to
-  measure the model before and after (not written with --holdout-size 0).
+  measure the model before and after. With --holdout-size 0 it is not written;
+  the paragraphs of the existing holdout file are then left out of the
+  training data instead.
 
 Questions about the same Wikipedia paragraph go to the same file, so the
 holdout shares no paragraph with the training data. Does not use a GPU.
@@ -50,6 +52,12 @@ def main() -> None:
     parser.add_argument("--out-dir", type=Path, default=DATA_DIR / "highlight")
     parser.add_argument("--train-size", type=int, default=3000, help="number of training pairs")
     parser.add_argument("--holdout-size", type=int, default=500, help="number of pairs kept out of training")
+    parser.add_argument(
+        "--holdout",
+        type=Path,
+        default=DATA_DIR / "highlight" / "holdout.jsonl",
+        help="with --holdout-size 0: an existing holdout file whose paragraphs must not get into training",
+    )
     parser.add_argument("--max-tokens", type=int, default=1000, help="longest pair to keep; max_seq_len of the config is 1024")
     parser.add_argument(
         "--same-words-only",
@@ -60,12 +68,20 @@ def main() -> None:
     args = parser.parse_args()
 
     tokenizer = AutoTokenizer.from_pretrained(config["model_path"])
+    held_out_paragraphs = set()
+    if not args.holdout_size and args.holdout.exists():
+        held_out_paragraphs = {
+            json.loads(line)["prompt"].rsplit("\n\n", 1)[0] for line in args.holdout.read_text().splitlines()
+        }
     kept: list[list[dict]] = []
-    total = whole_bold = too_long = other_words = 0
+    total = whole_bold = too_long = other_words = held_out = 0
     for path in args.input:
         kept.append([])
         for pair in map(json.loads, path.read_text().splitlines()):
             total += 1
+            if pair["prompt"].rsplit("\n\n", 1)[0] in held_out_paragraphs:
+                held_out += 1
+                continue
             if args.same_words_only and not pair.get("same_words", True):
                 other_words += 1
                 continue
@@ -114,8 +130,8 @@ def main() -> None:
                 file.write(json.dumps(pair, ensure_ascii=False) + "\n")
 
     print(
-        f"{total} pairs read; dropped: wording differs {other_words}, whole answer in bold {whole_bold}, "
-        f"longer than {args.max_tokens} tokens {too_long}"
+        f"{total} pairs read; dropped: paragraph is in the holdout {held_out}, wording differs {other_words}, "
+        f"whole answer in bold {whole_bold}, longer than {args.max_tokens} tokens {too_long}"
     )
     print(f"pairs kept per input: {', '.join(str(len(pairs)) for pairs in kept)}")
     print(f"{len(train)} training pairs and {len(holdout)} holdout pairs saved to {args.out_dir}")

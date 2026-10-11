@@ -53,7 +53,7 @@ D=~/data/dpo-qwen/data
   --same-words-only --per-input-size 5875 --train-size 100000 --holdout-size 0 --out-dir $D/highlight_three
 ```
 
-`--holdout-size 0` оставляет прежний `highlight/holdout.jsonl`, так что запуски сравниваются на одних и тех же вопросах.
+`--holdout-size 0` оставляет прежний `highlight/holdout.jsonl`, так что запуски сравниваются на одних и тех же вопросах; абзацы из него при этом автоматически исключаются из обучающего файла.
 
 ## Проверка
 
@@ -62,6 +62,15 @@ sbatch -o $OUT/eval.log scripts/train_dpo/eval.sh $OUT
 ```
 
 Поднимает vLLM с базовой моделью и всеми адаптерами `$OUT/epoch_*` и сравнивает их на отложенных парах. Сводка — в конце `eval.log`, ответы — в `eval.jsonl` и `eval.html`. Чтобы получить несколько контрольных точек за одно обучение, задайте `epochs=6 max_steps_per_epoch=250`: адаптер сохраняется каждые 250 шагов.
+
+Пересчитать сводку по уже сохранённым ответам, без GPU, и не учитывать вопросы, попавшие в обучающий файл:
+
+```bash
+/home/gpkiryukhov/.conda/envs/sglang/bin/python scripts/train_dpo/eval_holdout.py \
+  --summary-only --out $OUT/eval.jsonl --exclude-prompts-of $OUT/train_data.jsonl
+```
+
+В обучающий файл запуска `2026-10-11-nadir-dpo-three-kinds` по ошибке попали 100 из 503 проверочных вопросов, поэтому его и запуски, с которыми его сравнивают, считают по остальным 403: всем передают `--exclude-prompts-of` с его `train_data.jsonl`.
 
 ## Отличия от handoff-dpo
 

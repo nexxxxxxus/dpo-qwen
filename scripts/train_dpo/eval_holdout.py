@@ -55,45 +55,10 @@ def stems(text: str) -> set[str]:
     return {word[:5] for word in words(text) if len(word) >= 3 or word.isdigit()}
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base-url", required=True)
-    parser.add_argument("--models", nargs="+", required=True, help="served model names; the first one is the base model")
-    parser.add_argument("--holdout", type=Path, default=Path.home() / "data" / "dpo-qwen" / "data" / "highlight" / "holdout.jsonl")
-    parser.add_argument(
-        "--gold",
-        type=Path,
-        default=Path.home() / "data" / "dpo-qwen" / "outputs" / "sberquad_short.jsonl",
-        help="answers collected by scripts/collect_answers.py; the SberQuAD reference answers are taken from there",
-    )
-    parser.add_argument("--out", type=Path, required=True, help="JSONL file for the answers")
-    args = parser.parse_args()
-
-    rows = [json.loads(line) for line in args.holdout.read_text().splitlines()]
-    wanted = {row["uid"] for row in rows}
-    with args.gold.open() as file:
-        gold = {row["uid"]: row["gold"] for row in map(json.loads, file) if row["uid"] in wanted}
-    tasks = [(row, model) for row in rows for model in args.models]
-    with ThreadPoolExecutor(max_workers=32) as pool:
-        results = list(pool.map(lambda task: chat(args.base_url, task[1], task[0]["prompt"]), tasks))
-    for (row, model), result in zip(tasks, results):
-        row[model] = result
-    args.out.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
-
-    header = ["uid", "question", "reference", *args.models]
-    lines = [HTML_HEAD, '<table><colgroup><col class="uid"></colgroup><thead><tr>']
-    lines += [f"<th>{html.escape(name)}</th>" for name in header]
-    lines.append("</tr></thead><tbody>")
-    for row in rows:
-        cells = [str(row["uid"]), row["prompt"].split("\n\n")[-1], row["chosen"], *(row[model]["answer"] for model in args.models)]
-        cells = [BOLD.sub(r"<b>\1</b>", html.escape(cell)) for cell in cells]
-        lines.append("<tr>" + "".join(f"<td>{cell}</td>" for cell in cells) + "</tr>")
-    lines.append("</tbody></table></html>")
-    args.out.with_suffix(".html").write_text("\n".join(lines))
-
+def summarize(rows: list[dict], models: list[str], gold: dict) -> None:
     total = len(rows)
-    base = args.models[0]
-    for model in args.models:
+    base = models[0]
+    for model in models:
         answers = [row[model]["answer"] for row in rows]
         spans = [BOLD.findall(answer) for answer in answers]
         print(f"{model}:")
@@ -112,7 +77,77 @@ def main() -> None:
         print(f"  median length: {statistics.median(map(len, answers))} characters")
         print(f"  cut off or empty: {sum(row[model]['finish_reason'] != 'stop' or not row[model]['answer'] for row in rows)}/{total}")
         print(f"  with Chinese characters: {sum(bool(HAN.search(a)) for a in answers)}/{total}")
-    print(f"Saved the answers to {args.out} and .html")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--base-url", help="not needed with --summary-only")
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        help="served model names; the first one is the base model. With --summary-only: all models of the file by default",
+    )
+    parser.add_argument("--holdout", type=Path, default=Path.home() / "data" / "dpo-qwen" / "data" / "highlight" / "holdout.jsonl")
+    parser.add_argument(
+        "--gold",
+        type=Path,
+        default=Path.home() / "data" / "dpo-qwen" / "outputs" / "sberquad_short.jsonl",
+        help="answers collected by scripts/collect_answers.py; the SberQuAD reference answers are taken from there",
+    )
+    parser.add_argument("--out", type=Path, required=True, help="JSONL file for the answers")
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="do not ask the server: print the summary for the answers already saved in --out",
+    )
+    parser.add_argument(
+        "--exclude-prompts-of",
+        type=Path,
+        nargs="+",
+        default=[],
+        help="training files; holdout questions found in them are left out of the summary",
+    )
+    args = parser.parse_args()
+
+    if args.summary_only:
+        rows = [json.loads(line) for line in args.out.read_text().splitlines()]
+        # A model's column holds its answer; the other columns of a row are plain values.
+        models = args.models or [key for key, value in rows[0].items() if isinstance(value, dict) and "answer" in value]
+    else:
+        if not args.base_url or not args.models:
+            parser.error("--base-url and --models are required without --summary-only")
+        models = args.models
+        rows = [json.loads(line) for line in args.holdout.read_text().splitlines()]
+        tasks = [(row, model) for row in rows for model in models]
+        with ThreadPoolExecutor(max_workers=32) as pool:
+            results = list(pool.map(lambda task: chat(args.base_url, task[1], task[0]["prompt"]), tasks))
+        for (row, model), result in zip(tasks, results):
+            row[model] = result
+        args.out.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
+
+        header = ["uid", "question", "reference", *models]
+        lines = [HTML_HEAD, '<table><colgroup><col class="uid"></colgroup><thead><tr>']
+        lines += [f"<th>{html.escape(name)}</th>" for name in header]
+        lines.append("</tr></thead><tbody>")
+        for row in rows:
+            cells = [str(row["uid"]), row["prompt"].split("\n\n")[-1], row["chosen"], *(row[model]["answer"] for model in models)]
+            cells = [BOLD.sub(r"<b>\1</b>", html.escape(cell)) for cell in cells]
+            lines.append("<tr>" + "".join(f"<td>{cell}</td>" for cell in cells) + "</tr>")
+        lines.append("</tbody></table></html>")
+        args.out.with_suffix(".html").write_text("\n".join(lines))
+        print(f"Saved the answers to {args.out} and .html")
+
+    seen_in_training = set()
+    for path in args.exclude_prompts_of:
+        with path.open() as file:
+            seen_in_training |= {json.loads(line)["chosen"][0]["content"] for line in file}
+    counted = [row for row in rows if row["prompt"] not in seen_in_training]
+    if len(counted) < len(rows):
+        print(f"{len(rows) - len(counted)} of {len(rows)} questions are in the training data and are left out of the summary")
+    wanted = {row["uid"] for row in counted}
+    with args.gold.open() as file:
+        gold = {row["uid"]: row["gold"] for row in map(json.loads, file) if row["uid"] in wanted}
+    summarize(counted, models, gold)
 
 
 if __name__ == "__main__":
