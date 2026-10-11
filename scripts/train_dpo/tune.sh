@@ -5,7 +5,7 @@
 # questions. Run on the server, not through sbatch:
 #   scripts/train_dpo/tune.sh
 #   LRS="1e-5 2e-5" BETAS="0.1" scripts/train_dpo/tune.sh     # another grid
-#   CHECKPOINTS=1 TRAIN_TIME=1:15:00 scripts/train_dpo/tune.sh  # short runs: 250 steps each
+#   CHECKPOINTS=1 TRAIN_TIME=1:00:00 EVAL_TIME=0:30:00 scripts/train_dpo/tune.sh  # short runs: 250 steps each
 # Results: ~/data/dpo-qwen/outputs/<date>-nadir-tune-lr<lr>-beta<beta>/, one
 # table for all runs: scripts/train_dpo/tune_table.py.
 set -euo pipefail
@@ -18,6 +18,7 @@ CHECKPOINTS="${CHECKPOINTS:-4}"
 CHECKPOINT_STEPS="${CHECKPOINT_STEPS:-250}"
 # Time limit of one training job; a run takes about half an hour per checkpoint.
 TRAIN_TIME="${TRAIN_TIME:-3:30:00}"
+EVAL_TIME="${EVAL_TIME:-1:00:00}"
 
 for lr in $LRS; do
   for beta in $BETAS; do
@@ -29,7 +30,7 @@ for lr in $LRS; do
       --export=ALL,DATA_FILE="$DATA/train.jsonl" "$REPO/scripts/train_dpo/train.sh" "$out" \
       optimizer.lr="$lr" loss.beta="$beta" lr_scheduler.num_warmup_steps=50 \
       epochs="$CHECKPOINTS" max_steps_per_epoch="$CHECKPOINT_STEPS")
-    eval=$(sbatch --parsable -t 1:00:00 -J "$name-eval" -o "$out/eval.log" --dependency="afterok:$train" \
+    eval=$(sbatch --parsable -t "$EVAL_TIME" -J "$name-eval" -o "$out/eval.log" --dependency="afterok:$train" \
       "$REPO/scripts/train_dpo/eval.sh" "$out" --holdout "$DATA/validation.jsonl" --out "$out/eval_validation.jsonl")
     echo "lr $lr, beta $beta: training job $train, evaluation job $eval, $out"
   done
