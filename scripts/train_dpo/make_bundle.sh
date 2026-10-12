@@ -9,6 +9,8 @@ set -euo pipefail
 REPO="${REPO:-$HOME/dpo-qwen}"
 DATA="${DATA:-$HOME/data/dpo-qwen/data/tuning_two_kinds}"
 ANSWERS="${ANSWERS:-$HOME/data/dpo-qwen/outputs/sberquad_short.jsonl}"
+# Written by scripts/bench/download.py; a few megabytes, so they go into the archive.
+BENCHMARKS="${BENCHMARKS:-$HOME/data/dpo-qwen/data/benchmarks}"
 OUT="${OUT:-$HOME/data/dpo-qwen/outputs/dpo_highlight_bundle.tar.gz}"
 
 tmp=$(mktemp -d)
@@ -30,7 +32,10 @@ with open(answers) as source, open(out, "w") as target:
         if row["uid"] in wanted:
             target.write(json.dumps({"uid": row["uid"], "gold": row["gold"]}, ensure_ascii=False) + "\n")
 PY
+if [ -d "$BENCHMARKS" ]; then
+  cp -r "$BENCHMARKS" "$tmp/data/dpo-qwen/data/benchmarks"
+fi
 cp "$REPO/scripts/train_dpo/OTHER_MACHINE.md" "$tmp/README.md"
 tar -czf "$OUT" -C "$tmp" README.md dpo-qwen data
 ls -la "$OUT"
-tar -tzf "$OUT" | grep -v "^dpo-qwen/" | head -20
+tar -tzf "$OUT" | grep -v "^dpo-qwen/" | grep -v "benchmarks/mmlu_redux/." | head -30

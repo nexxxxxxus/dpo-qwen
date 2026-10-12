@@ -25,6 +25,7 @@ tar -xzf dpo_highlight_bundle.tar.gz -C ~
 
 - `~/dpo-qwen/` — код;
 - `~/data/dpo-qwen/data/tuning_two_kinds/` — `train.jsonl` (17 625 пар), `validation.jsonl` (1001 вопрос), `test.jsonl` (2001 вопрос), `gold.jsonl` (эталонные ответы SberQuAD для проверки);
+- `~/data/dpo-qwen/data/benchmarks/` — пять бенчмарков для проверки общих способностей модели после дообучения: IFEval, Multi-IF (русская часть), MMLU-Redux 2.0, INCLUDE (русская часть), PolyMath (английский и русский); всего 8348 вопросов, 6 МБ. Скачаны скриптом `scripts/bench/download.py`; на машине с интернетом их можно получить заново той же командой, версии датасетов в скрипте закреплены;
 - `~/README.md` — эта инструкция.
 
 ## 2. Поставить окружение

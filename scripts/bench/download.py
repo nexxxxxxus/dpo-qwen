@@ -19,7 +19,7 @@ import json
 import shutil
 from pathlib import Path
 
-from datasets import load_dataset
+from datasets import disable_progress_bars, load_dataset
 from huggingface_hub import hf_hub_download
 
 DEFAULT_OUT = Path.home() / "data" / "dpo-qwen" / "data" / "benchmarks"
@@ -109,6 +109,7 @@ def main() -> None:
     parser.add_argument("--only", nargs="+", choices=list(BENCHMARKS), default=list(BENCHMARKS))
     args = parser.parse_args()
 
+    disable_progress_bars()
     files: dict[str, int] = {}
     for name in args.only:
         BENCHMARKS[name](args.out, files)
