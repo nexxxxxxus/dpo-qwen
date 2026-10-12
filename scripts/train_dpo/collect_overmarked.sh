@@ -14,7 +14,9 @@
 set -euo pipefail
 REPO="${REPO:-$HOME/dpo-qwen}"
 MODEL="${MODEL:-/data/shared/dpo_team/models/Qwen3-8B}"
-PORT="${PORT:-30022}"
+# Every job needs its own port: with a shared one a job that starts while another
+# is serving talks to that server and gets the answers of the wrong adapter.
+PORT="${PORT:-$((31000 + ${SLURM_JOB_ID:-$$} % 4000))}"
 ADAPTER="${1:?directory of an adapter}"
 URL="http://127.0.0.1:$PORT"
 
@@ -23,6 +25,10 @@ URL="http://127.0.0.1:$PORT"
 export LD_LIBRARY_PATH="$REPO/.venv/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PYTHONUNBUFFERED=1
 
+if curl -sf -m 5 -o /dev/null "$URL/health"; then
+  echo "collect_overmarked.sh: port $PORT is already served by another process" >&2
+  exit 1
+fi
 "$REPO/.venv/bin/vllm" serve "$MODEL" --host 127.0.0.1 --port "$PORT" --served-model-name base \
   --reasoning-parser qwen3 --enable-lora --max-lora-rank 16 --lora-modules "adapter=$ADAPTER" &
 SERVER_PID=$!
