@@ -55,6 +55,13 @@ def stems(text: str) -> set[str]:
     return {word[:5] for word in words(text) if len(word) >= 3 or word.isdigit()}
 
 
+def default_gold() -> Path:
+    """Where the SberQuAD reference answers are: all the collected answers, or the small file of a bundle."""
+    data = Path.home() / "data" / "dpo-qwen"
+    answers = data / "outputs" / "sberquad_short.jsonl"
+    return answers if answers.exists() else data / "data" / "tuning_two_kinds" / "gold.jsonl"
+
+
 def load_gold(path: Path, rows: list[dict]) -> dict:
     """The SberQuAD reference answers of the given questions, by question id."""
     wanted = {row["uid"] for row in rows}
@@ -103,8 +110,8 @@ def main() -> None:
     parser.add_argument(
         "--gold",
         type=Path,
-        default=Path.home() / "data" / "dpo-qwen" / "outputs" / "sberquad_short.jsonl",
-        help="answers collected by scripts/collect_answers.py; the SberQuAD reference answers are taken from there",
+        default=default_gold(),
+        help="file with the SberQuAD reference answers: rows with uid and gold",
     )
     parser.add_argument("--out", type=Path, required=True, help="JSONL file for the answers")
     parser.add_argument(

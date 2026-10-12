@@ -16,6 +16,8 @@ set -euo pipefail
 REPO="${REPO:-$HOME/dpo-qwen}"
 CONFIG="$REPO/scripts/train_dpo/config.yaml"
 DATA_FILE="${DATA_FILE:-$HOME/data/dpo-qwen/data/highlight/train.jsonl}"
+# The shared read-only copy of the base model on our server; set MODEL on another machine.
+MODEL="${MODEL:-/data/shared/dpo_team/models/Qwen3-8B}"
 OUT="${1:?output directory}"
 
 # Keep what the run was made from next to its result.
@@ -29,4 +31,4 @@ cd "$REPO"
 export LD_LIBRARY_PATH="$REPO/.venv/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PYTHONUNBUFFERED=1 TQDM_MININTERVAL=30
 exec .venv/bin/tune run lora_dpo_single_device --config "$CONFIG" \
-  data_file="$DATA_FILE" output_dir="$OUT" "${@:2}"
+  data_file="$DATA_FILE" output_dir="$OUT" model_dir="$MODEL" "${@:2}"

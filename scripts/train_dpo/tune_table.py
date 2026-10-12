@@ -16,7 +16,7 @@ from pathlib import Path
 
 import yaml
 
-from eval_holdout import load_gold, metrics
+from eval_holdout import default_gold, load_gold, metrics
 
 OUTPUTS = Path.home() / "data" / "dpo-qwen" / "outputs"
 # Column title -> line of the summary of eval_holdout.py
@@ -35,7 +35,7 @@ def main() -> None:
     parser.add_argument("--runs", default="*-nadir-tune-*", help="pattern of run folders inside --outputs")
     parser.add_argument("--outputs", type=Path, default=OUTPUTS)
     parser.add_argument("--answers", default="eval_validation.jsonl", help="file with the answers inside a run folder")
-    parser.add_argument("--gold", type=Path, default=OUTPUTS / "sberquad_short.jsonl")
+    parser.add_argument("--gold", type=Path, default=default_gold())
     parser.add_argument("--csv", type=Path, default=OUTPUTS / "tune_table.csv")
     args = parser.parse_args()
 
