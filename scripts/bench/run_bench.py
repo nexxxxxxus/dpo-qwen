@@ -324,7 +324,13 @@ def math_equal(prediction: str | None, reference: str) -> bool:
     if "=" in left and "=" not in right and left.rsplit("=", 1)[-1] == right:
         return True
     first, second = as_number(left), as_number(right)
-    return first is not None and second is not None and abs(first - second) <= 1e-6 * max(1.0, abs(second))
+    if first is None or second is None:
+        return False
+    try:
+        return abs(first - second) <= 1e-6 * max(1.0, abs(second))
+    except OverflowError:
+        # Numbers too large for floating point, such as 10**400: equal only as text, checked above.
+        return False
 
 
 class PolyMath:
