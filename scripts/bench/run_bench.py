@@ -436,6 +436,10 @@ def main() -> None:
             for benchmark in benchmarks:
                 generate(benchmark, Server(args.base_url, model), args.results / model / f"{benchmark.name}.jsonl", args.limit, args.workers)
 
+    # The language check of IFEval guesses with a random start; fix it so that a recount gives the same figures.
+    import langdetect
+
+    langdetect.DetectorFactory.seed = 0
     table = []
     for model in models:
         scores = {}
