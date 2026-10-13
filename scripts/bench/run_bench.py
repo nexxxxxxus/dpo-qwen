@@ -185,11 +185,30 @@ class MultiIF:
 # ---------------------------------------------------------------- multiple choice
 
 
-def chosen_letter(text: str) -> str | None:
-    """The first option letter standing alone in an answer; Cyrillic look-alikes count."""
+# The models often reason before choosing even when asked for a letter only, so
+# they are given room for it and asked to end with a line that is easy to find.
+ANSWER_LINE = re.compile(r"(?:answer|ответ)\s*(?:is|:|—|–|-)?\s*[*_(\[\"«]*\s*([ABCD])(?![A-Za-zА-Яа-яЁё])", re.I)
+LONE_LETTER = re.compile(r"(?<![A-Za-zА-Яа-яЁё])([ABCD])(?![A-Za-zА-Яа-яЁё])")
+CHOICE_TOKENS = 1024
+
+
+def chosen_letter(text: str, cut: bool = False) -> str | None:
+    """The option a reply settles on: its last "Answer: X", else a letter standing alone.
+
+    Cyrillic look-alikes of A, B and C count. A reply cut off by the token limit
+    before its answer line has no answer.
+    """
     text = text.translate(str.maketrans("АВСавс", "ABCabc"))
-    match = re.search(r"(?<![A-Za-zА-Яа-яЁё])([ABCD])(?![A-Za-zА-Яа-яЁё])", text)
-    return match.group(1) if match else None
+    stated = ANSWER_LINE.findall(text)
+    if stated:
+        return stated[-1].upper()
+    if cut:
+        return None
+    letters = LONE_LETTER.findall(text)
+    if not letters:
+        return None
+    # A short reply is the letter itself; in a long one the choice comes at the end.
+    return letters[0] if len(text) < 40 else letters[-1]
 
 
 def options(choices: list[str]) -> str:
@@ -210,16 +229,16 @@ class MMLURedux:
         prompt = (
             f"The following is a multiple choice question about {row['subject']}.\n\n"
             f"{row['question']}\n{options(row['choices'])}\n\n"
-            "Answer with the letter of the correct option only: A, B, C or D."
+            'Finish your reply with the line "Answer: X", where X is A, B, C or D.'
         )
-        answer = server.ask([{"role": "user", "content": prompt}], 16)
+        answer = server.ask([{"role": "user", "content": prompt}], CHOICE_TOKENS)
         return {"response": answer["text"], "cut": answer["cut"]}
 
     def score(self, records: dict) -> dict:
         right_clean = clean = right_all = unparsed = 0
         for key, record in records.items():
             row = self.rows[key]
-            letter = chosen_letter(record["response"])
+            letter = chosen_letter(record["response"], record["cut"])
             unparsed += letter is None
             right = letter == LETTERS[int(row["answer"])]
             right_all += right
@@ -244,12 +263,12 @@ class Include:
     def run(self, key: str, server: Server) -> dict:
         row = self.rows[key]
         choices = [row[f"option_{letter}"] for letter in "abcd"]
-        prompt = f"{row['question']}\n{options(choices)}\n\nОтветь одной буквой — A, B, C или D."
-        answer = server.ask([{"role": "user", "content": prompt}], 16)
+        prompt = f"{row['question']}\n{options(choices)}\n\nЗакончи ответ строкой «Ответ: X», где X — A, B, C или D."
+        answer = server.ask([{"role": "user", "content": prompt}], CHOICE_TOKENS)
         return {"response": answer["text"], "cut": answer["cut"]}
 
     def score(self, records: dict) -> dict:
-        letters = {key: chosen_letter(record["response"]) for key, record in records.items()}
+        letters = {key: chosen_letter(record["response"], record["cut"]) for key, record in records.items()}
         right = sum(letter == LETTERS[int(self.rows[key]["answer"])] for key, letter in letters.items())
         return {"accuracy": 100 * right / len(records), "unparsed": sum(letter is None for letter in letters.values())}
 
